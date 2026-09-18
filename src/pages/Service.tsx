@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { CheckCircle2, Clock, Smartphone, Truck, Wrench } from 'lucide-react'
 import {
   formatINR,
   paymentModes,
@@ -112,11 +113,12 @@ export function ServicePage() {
       <PageHeader
         title="Service & billing"
         subtitle="New intake bill · or final delivery bill for today’s handovers"
+        icon={Wrench}
       />
 
       <AnimatePresence>
         {done ? (
-          <SuccessBanner title="Service billing saved (wireframe)" detail={done} onClose={() => setDone(null)} />
+          <SuccessBanner title="Service billing saved" detail={done} onClose={() => setDone(null)} />
         ) : null}
       </AnimatePresence>
 
@@ -124,8 +126,8 @@ export function ServicePage() {
         value={mode}
         onChange={setMode}
         tabs={[
-          { id: 'intake', label: 'New service bill' },
-          { id: 'delivery', label: `Today delivery (${todayDeliveries.length})` },
+          { id: 'intake', label: 'New service bill', icon: Wrench },
+          { id: 'delivery', label: `Today delivery (${todayDeliveries.length})`, icon: Truck },
         ]}
       />
 
@@ -405,7 +407,9 @@ export function ServicePage() {
             </Panel>
 
             <Panel style={{ padding: 16 }} delay={0.1} dashed>
-              <h2 className="section-title">Workshop board</h2>
+              <h2 className="section-title">
+                <Wrench size={18} /> Workshop board
+              </h2>
               <p className="muted" style={{ margin: '0 0 12px', fontSize: 'var(--fs-xs)' }}>
                 {STATUS_FLOW.join(' → ')}
               </p>
@@ -426,6 +430,7 @@ export function ServicePage() {
                           <div style={{ fontWeight: 600, fontSize: 'var(--fs-sm)' }}>{j.device}</div>
                         </div>
                         <span className={`chip ${j.status === 'Ready' ? 'chip--live' : 'chip--warn'}`}>
+                          {j.status === 'Ready' ? <CheckCircle2 size={12} /> : <Clock size={12} />}
                           {j.status}
                         </span>
                       </div>
@@ -450,7 +455,9 @@ export function ServicePage() {
           }}
         >
           <Panel style={{ padding: 16 }} delay={0.05}>
-            <h2 className="section-title">Today’s mobiles to deliver</h2>
+            <h2 className="section-title">
+              <Truck size={18} /> Today’s mobiles to deliver
+            </h2>
             <p className="muted" style={{ margin: '0 0 12px', fontSize: 'var(--fs-sm)' }}>
               {todayDeliveries.length} phone{todayDeliveries.length === 1 ? '' : 's'} due today — bill & handover
             </p>
@@ -474,6 +481,7 @@ export function ServicePage() {
                       {j.ticket} · {j.device}
                     </strong>
                     <span className={`chip ${j.status === 'Ready' ? 'chip--live' : 'chip--warn'}`}>
+                      {j.status === 'Ready' ? <CheckCircle2 size={12} /> : <Clock size={12} />}
                       {j.status}
                     </span>
                   </div>
@@ -489,7 +497,9 @@ export function ServicePage() {
           </Panel>
 
           <Panel style={{ padding: 16 }} delay={0.1}>
-            <h2 className="section-title">Final delivery bill</h2>
+            <h2 className="section-title">
+              <Smartphone size={18} /> Final delivery bill
+            </h2>
             {deliveryJob ? (
               <>
                 <div className="detail-card" style={{ marginBottom: 12 }}>
@@ -582,7 +592,7 @@ export function ServicePage() {
                   style={{ marginTop: 14 }}
                   onClick={() => finishDelivery(deliveryJob)}
                 >
-                  Save final bill & mark delivered
+                  <Smartphone size={18} /> Save final bill & mark delivered
                 </button>
               </>
             ) : (

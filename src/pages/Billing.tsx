@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
-import { Minus, Plus, Trash2 } from 'lucide-react'
+import { AnimatePresence } from 'framer-motion'
+import { Cable, Cpu, CreditCard, Minus, Plus, Receipt, ScanLine, Search, ShoppingBag, Smartphone, Trash2, UserRound } from 'lucide-react'
 import {
   customers,
   formatINR,
@@ -14,6 +14,40 @@ import { FlowStepper, FormActions, PageHeader, Panel, SuccessBanner } from '../c
 type CartItem = Product & { qty: number }
 
 const STEPS = ['Customer', 'Items', 'Payment', 'Confirm']
+const CATEGORIES = [
+  { id: 'all' as const, label: 'All', icon: ShoppingBag },
+  { id: 'Phone' as const, label: 'Phones', icon: Smartphone },
+  { id: 'Accessory' as const, label: 'Accessories', icon: Cable },
+  { id: 'Spare' as const, label: 'Spares', icon: Cpu },
+]
+
+function categoryIcon(category: Product['category']) {
+  if (category === 'Phone') return Smartphone
+  if (category === 'Accessory') return Cable
+  return Cpu
+}
+
+function ProductPreview({ product }: { product: Product }) {
+  const Icon = categoryIcon(product.category)
+  const brand = product.brand.toLowerCase().replace(/\s+/g, '')
+  if (product.category === 'Phone') {
+    return (
+      <div className="pos-preview pos-preview--phone" data-brand={brand}>
+        <div className="pos-handset" aria-hidden>
+          <span className="pos-handset__notch" />
+          <span className="pos-handset__screen" />
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className={`pos-preview pos-preview--${product.category.toLowerCase()}`} data-brand={brand}>
+      <span className="pos-preview__glyph">
+        <Icon size={28} />
+      </span>
+    </div>
+  )
+}
 
 export function BillingPage() {
   const [step, setStep] = useState(0)
@@ -111,27 +145,20 @@ export function BillingPage() {
     <div className="section-gap">
       <PageHeader
         title="New sale bill"
-        subtitle="Customer → scan/add items → payment → confirm"
+        subtitle={`${bill.name} · ${cart.length} item${cart.length === 1 ? '' : 's'} · ${formatINR(grand)}`}
+        icon={Receipt}
       />
 
-      <div className="page-hero-note">
-        <div>
-          <strong>Counter sale</strong>
-          <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginTop: 2 }}>
-            Stock deducts after save in Phase 2 · Cart {cart.length} item{cart.length === 1 ? '' : 's'}
-          </div>
-        </div>
-        <span className="chip chip--live">{formatINR(grand)}</span>
-      </div>
-
-      <AnimatePresence>{done ? <SuccessBanner title="Bill saved (wireframe)" detail={`Invoice ${done} · stock will deduct in Phase 2`} onClose={() => setDone(null)} /> : null}</AnimatePresence>
+      <AnimatePresence>{done ? <SuccessBanner title="Bill saved" detail={`Invoice ${done}`} onClose={() => setDone(null)} /> : null}</AnimatePresence>
 
       <FlowStepper steps={STEPS} current={step} />
 
       <Panel style={{ padding: 16 }} delay={0.05}>
         {step === 0 && (
           <div>
-            <h2 className="section-title">Customer details</h2>
+            <h2 className="section-title">
+              <UserRound size={18} /> Customer details
+            </h2>
             <div className="form-grid form-grid--2">
               <div className="field span-2">
                 <label>Quick pick saved customer</label>
@@ -209,16 +236,23 @@ export function BillingPage() {
         )}
 
         {step === 1 && (
-          <div>
-            <h2 className="section-title">Add items from stock</h2>
-            <div className="form-grid form-grid--2" style={{ marginBottom: 12 }}>
-              <div className="field">
-                <label>Scan / type SKU</label>
-                <div style={{ display: 'flex', gap: 8 }}>
+          <div className="pos">
+            <div className="pos__catalog">
+              <div className="pos-toolbar">
+                <div className="field-input-icon pos-search">
+                  <Search size={16} />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search products"
+                    aria-label="Search name, brand or SKU"
+                  />
+                </div>
+                <div className="pos-scan">
                   <input
                     value={bill.barcode}
                     onChange={(e) => setBill({ ...bill, barcode: e.target.value })}
-                    placeholder="PH-XN13"
+                    placeholder="Scan SKU"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault()
@@ -226,104 +260,141 @@ export function BillingPage() {
                       }
                     }}
                   />
-                  <button type="button" className="btn btn--ghost" onClick={addByBarcode}>
-                    Add
+                  <button type="button" className="btn btn--primary" onClick={addByBarcode} aria-label="Add scanned SKU">
+                    <ScanLine size={16} />
                   </button>
                 </div>
               </div>
-              <div className="field">
-                <label>Phone IMEI (optional)</label>
-                <input
-                  value={bill.imei}
-                  onChange={(e) => setBill({ ...bill, imei: e.target.value })}
-                  placeholder="For handset sales"
-                />
+
+              <div className="pos-cats" role="tablist" aria-label="Category">
+                {CATEGORIES.map((c) => {
+                  const Icon = c.icon
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={category === c.id}
+                      className={`pos-cat${category === c.id ? ' is-active' : ''}`}
+                      onClick={() => setCategory(c.id)}
+                    >
+                      <Icon size={15} />
+                      {c.label}
+                    </button>
+                  )
+                })}
               </div>
-              <div className="field">
-                <label>Search name / brand</label>
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Phone, accessory…"
-                />
-              </div>
-              <div className="field">
-                <label>Category</label>
-                <select value={category} onChange={(e) => setCategory(e.target.value as typeof category)}>
-                  <option value="all">All</option>
-                  <option value="Phone">Phone</option>
-                  <option value="Accessory">Accessory</option>
-                  <option value="Spare">Spare</option>
-                </select>
+
+              <div className="pos-grid">
+                {filtered.length === 0 ? (
+                  <div className="empty-state pos-grid__empty">No matching products</div>
+                ) : (
+                  filtered.map((p) => {
+                    const qty = cart.find((i) => i.id === p.id)?.qty ?? 0
+                    const low = p.stock <= p.lowAt
+                    return (
+                      <article key={p.id} className={`pos-card${qty ? ' is-in-cart' : ''}`}>
+                        <button type="button" className="pos-card__hit" onClick={() => addToCart(p)}>
+                          <span className="pos-card__media">
+                            <ProductPreview product={p} />
+                            <span className={`pos-card__stock ${low ? 'is-low' : ''}`}>
+                              {low ? 'Low' : 'In stock'} · {p.stock}
+                            </span>
+                          </span>
+                          <span className="pos-card__name">{p.name}</span>
+                          <span className="pos-card__meta">{p.brand}</span>
+                          <span className="pos-card__price">
+                            {formatINR(p.price)}
+                            {p.mrp > p.price ? <s>{formatINR(p.mrp)}</s> : null}
+                          </span>
+                        </button>
+                        {qty ? (
+                          <div className="pos-card__qty">
+                            <button type="button" aria-label="Decrease" onClick={() => bump(p.id, -1)}>
+                              <Minus size={14} />
+                            </button>
+                            <span>{qty}</span>
+                            <button type="button" aria-label="Increase" onClick={() => bump(p.id, 1)}>
+                              <Plus size={14} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button type="button" className="pos-card__add" onClick={() => addToCart(p)}>
+                            <Plus size={15} /> Add
+                          </button>
+                        )}
+                      </article>
+                    )
+                  })
+                )}
               </div>
             </div>
 
-            <div className="product-grid" style={{ marginBottom: 14 }}>
-              {filtered.map((p, i) => (
-                <motion.button
-                  key={p.id}
-                  type="button"
-                  className="product-tile"
-                  onClick={() => addToCart(p)}
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: i * 0.02 }}
-                  whileTap={{ scale: 0.97 }}
-                >
-                  <p className="product-tile__name">{p.name}</p>
-                  <p className="product-tile__meta">
-                    {p.sku} · Qty {p.stock}
-                  </p>
-                  <p className="product-tile__price">{formatINR(p.price)}</p>
-                </motion.button>
-              ))}
-            </div>
+            <aside className="pos-cart">
+              <div className="pos-cart__head">
+                <ShoppingBag size={18} />
+                <strong>Bill cart</strong>
+                <span className="chip">{cart.reduce((s, i) => s + i.qty, 0)}</span>
+              </div>
 
-            <h3 className="section-title" style={{ fontSize: 'var(--fs-base)' }}>
-              Cart ({cart.length})
-            </h3>
-            {cart.length === 0 ? (
-              <p className="muted" style={{ fontSize: 'var(--fs-sm)' }}>
-                Tap products above to add lines.
-              </p>
-            ) : (
-              cart.map((item) => (
-                <div key={item.id} className="cart-line">
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 'var(--fs-sm)' }}>{item.name}</div>
-                    <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
-                      {formatINR(item.price)} × {item.qty} = {formatINR(item.price * item.qty)}
-                    </div>
-                  </div>
-                  <div className="qty-ctrl">
-                    <button type="button" onClick={() => bump(item.id, -1)}>
-                      <Minus size={14} />
-                    </button>
-                    <span>{item.qty}</span>
-                    <button type="button" onClick={() => bump(item.id, 1)}>
-                      <Plus size={14} />
-                    </button>
-                    <button type="button" onClick={() => bump(item.id, -item.qty)}>
-                      <Trash2 size={14} color="var(--danger)" />
-                    </button>
-                  </div>
+              {cart.length === 0 ? (
+                <div className="pos-cart__empty">
+                  <ShoppingBag size={28} />
+                  <p>Tap a product to add it</p>
                 </div>
-              ))
-            )}
+              ) : (
+                <div className="pos-cart__lines">
+                  {cart.map((item) => (
+                    <div key={item.id} className="pos-cart__line">
+                      <div>
+                        <div className="pos-cart__name">{item.name}</div>
+                        <div className="muted">{formatINR(item.price)}</div>
+                      </div>
+                      <div className="qty-ctrl">
+                        <button type="button" onClick={() => bump(item.id, -1)} aria-label="Decrease">
+                          <Minus size={14} />
+                        </button>
+                        <span>{item.qty}</span>
+                        <button type="button" onClick={() => bump(item.id, 1)} aria-label="Increase">
+                          <Plus size={14} />
+                        </button>
+                        <button type="button" onClick={() => bump(item.id, -item.qty)} aria-label="Remove">
+                          <Trash2 size={14} color="var(--danger)" />
+                        </button>
+                      </div>
+                      <div className="pos-cart__amt">{formatINR(item.price * item.qty)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-            <div className="totals-box">
-              <div className="totals-row">
-                <span>Subtotal</span>
-                <span>{formatINR(subtotal)}</span>
+              {cart.some((i) => i.category === 'Phone') ? (
+                <div className="field" style={{ marginTop: 12 }}>
+                  <label>IMEI</label>
+                  <input
+                    value={bill.imei}
+                    onChange={(e) => setBill({ ...bill, imei: e.target.value })}
+                    placeholder="Handset IMEI"
+                  />
+                </div>
+              ) : null}
+
+              <div className="totals-box">
+                <div className="totals-row totals-row--grand">
+                  <span>Subtotal</span>
+                  <span>{formatINR(subtotal)}</span>
+                </div>
               </div>
-            </div>
-            <FormActions onBack={() => setStep(0)} onNext={() => setStep(2)} nextDisabled={cart.length === 0} />
+              <FormActions onBack={() => setStep(0)} onNext={() => setStep(2)} nextDisabled={cart.length === 0} />
+            </aside>
           </div>
         )}
 
         {step === 2 && (
           <div>
-            <h2 className="section-title">Payment & charges</h2>
+            <h2 className="section-title">
+              <CreditCard size={18} /> Payment & charges
+            </h2>
             <div className="form-grid form-grid--2">
               <div className="field">
                 <label>Discount ₹</label>
@@ -401,7 +472,9 @@ export function BillingPage() {
 
         {step === 3 && (
           <div>
-            <h2 className="section-title">Confirm bill</h2>
+            <h2 className="section-title">
+              <Receipt size={18} /> Confirm bill
+            </h2>
             <div className="detail-card" style={{ marginBottom: 12 }}>
               <div className="form-grid form-grid--2">
                 <div>

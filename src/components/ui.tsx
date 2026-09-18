@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import type { CSSProperties, ReactNode } from 'react'
-import { Check } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, CheckCircle2, type LucideIcon } from 'lucide-react'
 
 export function AmbientBackground() {
   return (
@@ -12,30 +12,32 @@ export function AmbientBackground() {
   )
 }
 
-export function WireTag({ children = 'Wireframe' }: { children?: ReactNode }) {
-  return <span className="wire-tag">{children}</span>
-}
-
 export function PageHeader({
   title,
   subtitle,
   action,
+  icon: Icon,
 }: {
   title: string
   subtitle?: string
   action?: ReactNode
+  icon?: LucideIcon
 }) {
   return (
     <div className="row-between" style={{ marginBottom: 18 }}>
       <div>
-        <WireTag />
         <motion.h1
           className="page-title"
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35 }}
         >
-          {title}
+          {Icon ? (
+            <span className="page-title__icon" aria-hidden>
+              <Icon size={26} />
+            </span>
+          ) : null}
+          <span>{title}</span>
         </motion.h1>
         {subtitle ? <p className="page-sub">{subtitle}</p> : null}
       </div>
@@ -110,14 +112,17 @@ export function SuccessBanner({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -8 }}
     >
-      <div>
-        <strong>{title}</strong>
-        <p className="muted" style={{ margin: '4px 0 0', fontSize: 'var(--fs-sm)' }}>
-          {detail}
-        </p>
+      <div className="success-banner__copy">
+        <CheckCircle2 size={22} color="var(--brand-deep)" />
+        <div>
+          <strong>{title}</strong>
+          <p className="muted" style={{ margin: '4px 0 0', fontSize: 'var(--fs-sm)' }}>
+            {detail}
+          </p>
+        </div>
       </div>
-      <button type="button" className="btn btn--ghost" style={{ padding: '8px 12px' }} onClick={onClose}>
-        OK
+      <button type="button" className="btn btn--ghost" style={{ padding: '8px 12px' }} onClick={onClose} aria-label="Dismiss">
+        <Check size={16} />
       </button>
     </motion.div>
   )
@@ -142,6 +147,7 @@ export function FormActions({
     <div className="form-actions">
       {showBack && onBack ? (
         <button type="button" className="btn btn--ghost" onClick={onBack}>
+          <ArrowLeft size={16} />
           {backLabel}
         </button>
       ) : (
@@ -149,6 +155,7 @@ export function FormActions({
       )}
       <button type="button" className="btn btn--primary" disabled={nextDisabled} onClick={onNext}>
         {nextLabel}
+        <ArrowRight size={16} />
       </button>
     </div>
   )
@@ -159,24 +166,28 @@ export function ModeTabs<T extends string>({
   value,
   onChange,
 }: {
-  tabs: { id: T; label: string }[]
+  tabs: { id: T; label: string; icon?: LucideIcon }[]
   value: T
   onChange: (id: T) => void
 }) {
   return (
     <div className="mode-tabs" role="tablist">
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          role="tab"
-          aria-selected={value === t.id}
-          className={`mode-tab${value === t.id ? ' is-active' : ''}`}
-          onClick={() => onChange(t.id)}
-        >
-          {t.label}
-        </button>
-      ))}
+      {tabs.map((t) => {
+        const Icon = t.icon
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={value === t.id}
+            className={`mode-tab${value === t.id ? ' is-active' : ''}`}
+            onClick={() => onChange(t.id)}
+          >
+            {Icon ? <Icon size={16} /> : null}
+            {t.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -187,16 +198,21 @@ export function MiniStat({
   hint,
   tone = 'default',
   onClick,
+  icon: Icon,
 }: {
   label: string
   value: string
   hint?: string
   tone?: 'default' | 'warn' | 'ok' | 'info'
   onClick?: () => void
+  icon?: LucideIcon
 }) {
   const body = (
     <>
-      <div className="mini-stat__label">{label}</div>
+      <div className="mini-stat__label">
+        {Icon ? <Icon size={14} /> : null}
+        {label}
+      </div>
       <div className="mini-stat__value">{value}</div>
       {hint ? <div className="mini-stat__hint">{hint}</div> : null}
     </>

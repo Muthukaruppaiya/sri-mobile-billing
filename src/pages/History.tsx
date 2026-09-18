@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Banknote, CheckCircle2, Clock, History, MessageCircle, Printer, Receipt, Search, Wrench } from 'lucide-react'
 import { formatINR, recentBills } from '../data/mock'
 import { MiniStat, PageHeader, Panel } from '../components/ui'
 
@@ -40,23 +41,25 @@ export function HistoryPage() {
       <PageHeader
         title="Bills history"
         subtitle="Search · filter · collect balance · print"
+        icon={History}
         action={
           <button type="button" className="btn btn--primary" onClick={() => navigate('/app/billing')}>
-            New sale
+            <Receipt size={16} /> New sale
           </button>
         }
       />
 
       <div className="mini-stat-grid">
-        <MiniStat label="Today bills" value={String(recentBills.length)} hint="Sale + service" tone="ok" />
-        <MiniStat label="Sale bills" value={String(saleCount)} onClick={() => setFilter('Sale')} />
-        <MiniStat label="Service bills" value={String(serviceCount)} tone="info" onClick={() => setFilter('Service')} />
+        <MiniStat label="Today bills" value={String(recentBills.length)} hint="Sale + service" tone="ok" icon={Receipt} />
+        <MiniStat label="Sale bills" value={String(saleCount)} onClick={() => setFilter('Sale')} icon={Receipt} />
+        <MiniStat label="Service bills" value={String(serviceCount)} tone="info" onClick={() => setFilter('Service')} icon={Wrench} />
         <MiniStat
           label="Pending collect"
           value={formatINR(pendingAmt)}
           hint={`${pendingCount} invoices`}
           tone="warn"
           onClick={() => setFilter('Pending')}
+          icon={Banknote}
         />
       </div>
 
@@ -71,11 +74,14 @@ export function HistoryPage() {
           <div className="toolbar">
             <div className="field">
               <label>Search</label>
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Bill no / customer / phone"
-              />
+              <div className="field-input-icon">
+                <Search size={16} />
+                <input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Bill no / customer / phone"
+                />
+              </div>
             </div>
           </div>
 
@@ -129,6 +135,7 @@ export function HistoryPage() {
                       <td>{formatINR(b.amount)}</td>
                       <td>
                         <span className={`chip ${b.status === 'Paid' ? 'chip--live' : 'chip--warn'}`}>
+                          {b.status === 'Paid' ? <CheckCircle2 size={12} /> : <Clock size={12} />}
                           {b.status}
                         </span>
                       </td>
@@ -141,13 +148,16 @@ export function HistoryPage() {
         </Panel>
 
         <Panel style={{ padding: 16 }} delay={0.1}>
-          <h2 className="section-title">Bill detail</h2>
+          <h2 className="section-title">
+            <Receipt size={18} /> Bill detail
+          </h2>
           {selected ? (
             <div className="section-gap">
               <div className="detail-card is-selected">
                 <div className="row-between">
                   <strong>{selected.no}</strong>
                   <span className={`chip ${selected.status === 'Paid' ? 'chip--live' : 'chip--warn'}`}>
+                    {selected.status === 'Paid' ? <CheckCircle2 size={12} /> : <Clock size={12} />}
                     {selected.status}
                   </span>
                 </div>
@@ -187,14 +197,14 @@ export function HistoryPage() {
 
               <div style={{ display: 'grid', gap: 8 }}>
                 <button type="button" className="btn btn--primary btn--block">
-                  Print / PDF
+                  <Printer size={16} /> Print / PDF
                 </button>
                 <button type="button" className="btn btn--ghost btn--block">
-                  Share WhatsApp
+                  <MessageCircle size={16} /> Share WhatsApp
                 </button>
                 {selected.amount - selected.paid > 0 ? (
                   <button type="button" className="btn btn--accent btn--block">
-                    Collect {formatINR(Number(collectAmt) || 0)}
+                    <Banknote size={16} /> Collect {formatINR(Number(collectAmt) || 0)}
                   </button>
                 ) : null}
               </div>

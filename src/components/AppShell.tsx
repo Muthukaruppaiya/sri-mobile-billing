@@ -1,13 +1,16 @@
+import { useEffect, useId, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  ClipboardList,
   History,
   LayoutDashboard,
+  Menu,
   Package,
   Receipt,
+  Smartphone,
   Users,
   Wrench,
+  X,
 } from 'lucide-react'
 import { AmbientBackground } from './ui'
 
@@ -24,37 +27,17 @@ const sideLinks = [
   { to: '/app/customers', label: 'Customers', icon: Users, end: undefined as boolean | undefined },
 ]
 
-function BrandMark() {
+function BrandMark({ compact = false }: { compact?: boolean }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <div
-        style={{
-          width: 42,
-          height: 42,
-          borderRadius: 12,
-          border: '2px solid var(--brand)',
-          display: 'grid',
-          placeItems: 'center',
-          background: 'rgba(14,168,122,0.08)',
-          boxShadow: '0 0 24px rgba(14,168,122,0.15)',
-        }}
-      >
-        <ClipboardList size={18} color="var(--brand)" />
+    <div className={`brand-mark${compact ? ' brand-mark--compact' : ''}`}>
+      <div className="brand-mark__icon">
+        <Smartphone size={compact ? 16 : 18} color="var(--brand)" />
       </div>
-      <div>
-        <div
-          style={{
-            fontFamily: 'var(--font-display)',
-            fontWeight: 700,
-            letterSpacing: '-0.02em',
-            fontSize: 'var(--fs-lg)',
-          }}
-        >
-          SRI MOBILES
-        </div>
-        <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-muted)', fontWeight: 400 }}>
-          Billing · Stock · Service
-        </div>
+      <div className="brand-mark__text">
+        <div className="brand-mark__name">SRI MOBILES</div>
+        {!compact ? (
+          <div className="brand-mark__tag">Billing · Stock · Service</div>
+        ) : null}
       </div>
     </div>
   )
@@ -62,41 +45,99 @@ function BrandMark() {
 
 export function AppShell() {
   const location = useLocation()
+  const [navOpen, setNavOpen] = useState(false)
+  const navId = useId()
+
+  useEffect(() => {
+    setNavOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 900px)')
+    const onChange = () => {
+      if (desktop.matches) setNavOpen(false)
+    }
+    desktop.addEventListener('change', onChange)
+    return () => desktop.removeEventListener('change', onChange)
+  }, [])
+
+  useEffect(() => {
+    if (!navOpen) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNavOpen(false)
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = ''
+    }
+  }, [navOpen])
 
   return (
     <>
       <AmbientBackground />
-      <div className="shell">
-        <aside className="side-nav">
-          <div className="side-nav__brand">
-            <BrandMark />
-            <p style={{ marginTop: 14 }}>Phase 1 · UI Wireframe</p>
-          </div>
-          {sideLinks.map(({ to, end, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) => `nav-item${isActive ? ' is-active' : ''}`}
+      <div className={`shell${navOpen ? ' is-nav-open' : ''}`}>
+        <header className="top-bar">
+          <button
+            type="button"
+            className="nav-toggle"
+            aria-label={navOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={navOpen}
+            aria-controls={navId}
+            onClick={() => setNavOpen((open) => !open)}
+          >
+            {navOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+          <BrandMark compact />
+          <NavLink to="/app/customers" className="nav-toggle" aria-label="Customers">
+            <Users size={18} />
+          </NavLink>
+        </header>
+
+        <button
+          type="button"
+          className="side-nav-backdrop"
+          aria-label="Close menu"
+          tabIndex={navOpen ? 0 : -1}
+          onClick={() => setNavOpen(false)}
+        />
+
+        <aside id={navId} className={`side-nav${navOpen ? ' is-open' : ''}`} aria-label="Main">
+          <div className="side-nav__head">
+            <div className="side-nav__brand">
+              <BrandMark />
+            </div>
+            <button
+              type="button"
+              className="nav-toggle nav-toggle--drawer"
+              aria-label="Close menu"
+              onClick={() => setNavOpen(false)}
             >
-              <Icon size={18} />
-              {label}
-            </NavLink>
-          ))}
+              <X size={18} />
+            </button>
+          </div>
+
+          <nav className="side-nav__links">
+            {sideLinks.map(({ to, end, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                className={({ isActive }) => `nav-item${isActive ? ' is-active' : ''}`}
+              >
+                <Icon size={18} />
+                {label}
+              </NavLink>
+            ))}
+          </nav>
         </aside>
 
         <div className="shell__main">
           <div className="page">
-            <div className="row-between" style={{ marginBottom: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <span className="chip chip--live">● Live preview</span>
-                <span className="chip">Mock data only</span>
-                <NavLink to="/app/customers" className="chip" style={{ textDecoration: 'none' }}>
-                  Customers
-                </NavLink>
-              </div>
-            </div>
-
             <AnimatePresence mode="wait">
               <motion.div
                 key={location.pathname}

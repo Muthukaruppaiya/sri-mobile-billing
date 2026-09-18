@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-import { ArrowUpRight, History, PackageMinus, Receipt, Smartphone, Users, Wrench } from 'lucide-react'
+import { ArrowUpRight, History, IndianRupee, LayoutDashboard, PackageMinus, Receipt, Smartphone, Truck, Users, Wrench } from 'lucide-react'
 import {
   formatINR,
   products,
@@ -73,6 +73,7 @@ export function DashboardPage() {
       <PageHeader
         title="Good evening"
         subtitle={`${todayDeliveryCount} mobile${todayDeliveryCount === 1 ? '' : 's'} to deliver today`}
+        icon={LayoutDashboard}
         action={
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button className="btn btn--accent" onClick={() => navigate('/app/service')}>
@@ -91,6 +92,7 @@ export function DashboardPage() {
           value={String(todayDeliveryCount).padStart(2, '0')}
           hint={`${readyToday.length} ready`}
           tone="warn"
+          icon={Truck}
           onClick={() => navigate('/app/service')}
         />
         <MiniStat
@@ -98,18 +100,21 @@ export function DashboardPage() {
           value={String(lowStock.length).padStart(2, '0')}
           hint="Reorder soon"
           tone="warn"
+          icon={PackageMinus}
           onClick={() => navigate('/app/stock')}
         />
         <MiniStat
           label="Stock value"
           value={formatINR(stockValue)}
           tone="ok"
+          icon={IndianRupee}
           onClick={() => navigate('/app/stock')}
         />
         <MiniStat
           label="Open jobs"
           value={String(serviceJobs.filter((j) => j.status !== 'Delivered').length).padStart(2, '0')}
           tone="info"
+          icon={Wrench}
           onClick={() => navigate('/app/service')}
         />
       </div>
@@ -118,19 +123,19 @@ export function DashboardPage() {
         <div className="row-between" style={{ marginBottom: 12 }}>
           <div>
             <h2 className="section-title" style={{ marginBottom: 4 }}>
-              Today — mobiles to deliver
+              <Smartphone size={18} /> Today — mobiles to deliver
             </h2>
             <p className="muted" style={{ margin: 0, fontSize: 'var(--fs-sm)' }}>
               {todayDeliveryCount} phones due · {readyToday.length} ready for billing & handover
             </p>
           </div>
-          <button
+            <button
             type="button"
             className="btn btn--accent"
             style={{ padding: '8px 12px' }}
             onClick={() => navigate('/app/service')}
           >
-            Open delivery bill
+            <Truck size={16} /> Delivery
           </button>
         </div>
 
@@ -155,6 +160,7 @@ export function DashboardPage() {
               <div className="row-between">
                 <strong style={{ fontSize: 'var(--fs-sm)' }}>{j.device}</strong>
                 <span className={`chip ${j.status === 'Ready' ? 'chip--live' : 'chip--warn'}`}>
+                  {j.status === 'Ready' ? <Smartphone size={12} /> : <Wrench size={12} />}
                   {j.status}
                 </span>
               </div>
@@ -195,7 +201,9 @@ export function DashboardPage() {
       </div>
 
       <Panel style={{ padding: 16 }} delay={0.2}>
-        <h2 className="section-title">Start a flow</h2>
+            <h2 className="section-title">
+              <Receipt size={18} /> Start a flow
+            </h2>
         <div
           style={{
             display: 'grid',
@@ -239,10 +247,10 @@ export function DashboardPage() {
         <Panel style={{ padding: 16 }} delay={0.25}>
           <div className="row-between" style={{ marginBottom: 8 }}>
             <h2 className="section-title" style={{ marginBottom: 0 }}>
-              Recent bills
+              <History size={18} /> Recent bills
             </h2>
-            <button className="btn btn--ghost" style={{ padding: '6px 10px' }} onClick={() => navigate('/app/history')}>
-              All
+            <button className="btn btn--ghost" style={{ padding: '6px 10px' }} onClick={() => navigate('/app/history')} aria-label="All bills">
+              <History size={14} />
             </button>
           </div>
           <div className="table-wrap">
@@ -263,6 +271,7 @@ export function DashboardPage() {
                     <td>{formatINR(b.amount)}</td>
                     <td>
                       <span className={`chip ${b.status === 'Paid' ? 'chip--live' : 'chip--warn'}`}>
+                        {b.status === 'Paid' ? <Receipt size={12} /> : null}
                         {b.status}
                       </span>
                     </td>
@@ -276,10 +285,10 @@ export function DashboardPage() {
         <Panel style={{ padding: 16 }} delay={0.3} dashed>
           <div className="row-between">
             <h2 className="section-title" style={{ marginBottom: 0 }}>
-              Low stock
+              <PackageMinus size={18} /> Low stock
             </h2>
-            <button className="btn btn--ghost" style={{ padding: '6px 10px' }} onClick={() => navigate('/app/stock')}>
-              Restock
+            <button className="btn btn--ghost" style={{ padding: '6px 10px' }} onClick={() => navigate('/app/stock')} aria-label="Restock">
+              <PackageMinus size={14} />
             </button>
           </div>
           <div className="product-grid" style={{ marginTop: 12 }}>

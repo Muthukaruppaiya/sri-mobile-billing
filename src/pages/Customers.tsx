@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
+import { MapPin, Phone, Receipt, Search, UserPlus, Users, Wrench } from 'lucide-react'
 import { customers } from '../data/mock'
 import {
   FlowStepper,
@@ -54,10 +55,11 @@ export function CustomersPage() {
       <PageHeader
         title="Customers"
         subtitle="Directory for sale & service billing"
+        icon={Users}
         action={
           step === null ? (
             <button type="button" className="btn btn--primary" onClick={() => setStep(0)}>
-              Add customer
+              <UserPlus size={16} /> Add customer
             </button>
           ) : undefined
         }
@@ -66,7 +68,7 @@ export function CustomersPage() {
       <AnimatePresence>
         {done ? (
           <SuccessBanner
-            title="Customer saved (wireframe)"
+            title="Customer saved"
             detail={`${done} is ready to pick in billing`}
             onClose={() => setDone(null)}
           />
@@ -157,18 +159,20 @@ export function CustomersPage() {
       ) : (
         <>
           <div className="mini-stat-grid">
-            <MiniStat label="Customers" value={String(activeCustomers)} tone="ok" />
+            <MiniStat label="Customers" value={String(activeCustomers)} tone="ok" icon={Users} />
             <MiniStat
               label="Visited today"
               value={String(customers.filter((c) => c.lastVisit === 'Today').length)}
               tone="info"
+              icon={Phone}
             />
             <MiniStat
               label="Top visits"
               value={String(Math.max(...customers.map((c) => c.visits)))}
               hint="Most loyal"
+              icon={UserPlus}
             />
-            <MiniStat label="Cities" value={String(new Set(customers.map((c) => c.city).filter((c) => c !== '—')).size)} />
+            <MiniStat label="Cities" value={String(new Set(customers.map((c) => c.city).filter((c) => c !== '—')).size)} icon={MapPin} />
           </div>
 
           <div
@@ -181,7 +185,10 @@ export function CustomersPage() {
             <Panel style={{ padding: 16 }} delay={0.05}>
               <div className="field" style={{ marginBottom: 14 }}>
                 <label>Search customers</label>
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name / phone / city" />
+                <div className="field-input-icon">
+                  <Search size={16} />
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name / phone / city" />
+                </div>
               </div>
               {list.length === 0 ? (
                 <div className="empty-state">No customers found.</div>
@@ -217,7 +224,9 @@ export function CustomersPage() {
             </Panel>
 
             <Panel style={{ padding: 16 }} delay={0.1}>
-              <h2 className="section-title">Customer card</h2>
+              <h2 className="section-title">
+                <Users size={18} /> Customer card
+              </h2>
               {selected ? (
                 <div className="section-gap">
                   <div className="detail-card is-selected">
@@ -237,10 +246,10 @@ export function CustomersPage() {
                   </div>
                   <div style={{ display: 'grid', gap: 8 }}>
                     <button type="button" className="btn btn--primary btn--block" onClick={() => navigate('/app/billing')}>
-                      New sale bill
+                      <Receipt size={16} /> New sale bill
                     </button>
                     <button type="button" className="btn btn--ghost btn--block" onClick={() => navigate('/app/service')}>
-                      New service bill
+                      <Wrench size={16} /> New service bill
                     </button>
                   </div>
                 </div>

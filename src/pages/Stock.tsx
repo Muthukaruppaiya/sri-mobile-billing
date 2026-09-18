@@ -1,6 +1,18 @@
 import { useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
+  AlertTriangle,
+  ArrowLeftRight,
+  ArrowRightLeft,
+  IndianRupee,
+  List,
+  Package,
+  PackageMinus,
+  PackagePlus,
+  Plus,
+  Search,
+} from 'lucide-react'
+import {
   formatINR,
   products,
   staffNames,
@@ -125,13 +137,14 @@ export function StockPage() {
       <PageHeader
         title="Stock maintenance"
         subtitle="Search inventory · adjust · transfer · add products"
+        icon={Package}
         action={
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="btn btn--ghost" style={{ padding: '8px 12px' }} onClick={() => openAdjust(undefined, 'in')}>
-              Stock in
+              <PackagePlus size={16} /> Stock in
             </button>
             <button type="button" className="btn btn--primary" style={{ padding: '8px 12px' }} onClick={() => { setView('add'); setStep(0) }}>
-              Add product
+              <Plus size={16} /> Add product
             </button>
           </div>
         }
@@ -139,15 +152,15 @@ export function StockPage() {
 
       <AnimatePresence>
         {done ? (
-          <SuccessBanner title="Stock updated (wireframe)" detail={done} onClose={() => setDone(null)} />
+          <SuccessBanner title="Stock updated" detail={done} onClose={() => setDone(null)} />
         ) : null}
       </AnimatePresence>
 
       <div className="mini-stat-grid">
-        <MiniStat label="Total SKUs" value={String(products.length)} hint={`${phoneCount} phones`} tone="ok" onClick={() => setView('list')} />
-        <MiniStat label="Low stock" value={String(lowCount).padStart(2, '0')} hint="Needs reorder" tone="warn" onClick={() => { setView('list'); setStatus('low') }} />
-        <MiniStat label="Stock value" value={formatINR(stockValue)} hint="At selling price" tone="info" />
-        <MiniStat label="Ledger today" value={String(stockLedger.length)} hint="Movements" />
+        <MiniStat label="Total SKUs" value={String(products.length)} hint={`${phoneCount} phones`} tone="ok" onClick={() => setView('list')} icon={Package} />
+        <MiniStat label="Low stock" value={String(lowCount).padStart(2, '0')} hint="Needs reorder" tone="warn" onClick={() => { setView('list'); setStatus('low') }} icon={AlertTriangle} />
+        <MiniStat label="Stock value" value={formatINR(stockValue)} hint="At selling price" tone="info" icon={IndianRupee} />
+        <MiniStat label="Ledger today" value={String(stockLedger.length)} hint="Movements" icon={List} />
       </div>
 
       <ModeTabs
@@ -157,10 +170,10 @@ export function StockPage() {
           setStep(0)
         }}
         tabs={[
-          { id: 'list', label: 'Inventory' },
-          { id: 'adjust', label: 'Stock in / out' },
-          { id: 'transfer', label: 'Transfer' },
-          { id: 'add', label: 'Add product' },
+          { id: 'list', label: 'Inventory', icon: Package },
+          { id: 'adjust', label: 'Stock in / out', icon: PackagePlus },
+          { id: 'transfer', label: 'Transfer', icon: ArrowLeftRight },
+          { id: 'add', label: 'Add product', icon: Plus },
         ]}
       />
 
@@ -176,11 +189,14 @@ export function StockPage() {
             <div className="toolbar">
               <div className="field">
                 <label>Search</label>
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="SKU / name / brand / rack"
-                />
+                <div className="field-input-icon">
+                  <Search size={16} />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="SKU / name / brand / rack"
+                  />
+                </div>
               </div>
               <div className="field" style={{ maxWidth: 140 }}>
                 <label>Sort</label>
@@ -247,6 +263,7 @@ export function StockPage() {
                           <td>{formatINR(p.price * p.stock)}</td>
                           <td>
                             <span className={`chip ${low ? 'chip--warn' : 'chip--live'}`}>
+                              {low ? <AlertTriangle size={12} /> : <Package size={12} />}
                               {low ? 'Low' : 'OK'}
                             </span>
                           </td>
@@ -296,10 +313,10 @@ export function StockPage() {
                 </div>
                 <div style={{ display: 'grid', gap: 8 }}>
                   <button type="button" className="btn btn--primary btn--block" onClick={() => openAdjust(selected.id, 'in')}>
-                    Stock in
+                    <PackagePlus size={16} /> Stock in
                   </button>
                   <button type="button" className="btn btn--ghost btn--block" onClick={() => openAdjust(selected.id, 'out')}>
-                    Stock out
+                    <PackageMinus size={16} /> Stock out
                   </button>
                   <button
                     type="button"
@@ -310,7 +327,7 @@ export function StockPage() {
                       setForm((f) => ({ ...f, productId: selected.id, fromLoc: selected.location }))
                     }}
                   >
-                    Transfer rack
+                    <ArrowRightLeft size={16} /> Transfer rack
                   </button>
                 </div>
                 {selected.stock <= selected.lowAt ? (
@@ -321,7 +338,9 @@ export function StockPage() {
                         Order at least {selected.lowAt * 2} units
                       </div>
                     </div>
-                    <span className="chip chip--warn">Low</span>
+                    <span className="chip chip--warn">
+                      <AlertTriangle size={12} /> Low
+                    </span>
                   </div>
                 ) : null}
               </div>
