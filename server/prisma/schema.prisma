@@ -1,0 +1,434 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  EMPLOYEE
+}
+
+enum ProductCategory {
+  NEW_PHONE
+  USED_PHONE
+  SPARE
+  ACCESSORY
+}
+
+enum PhoneStatus {
+  IN_STOCK
+  SOLD
+  IN_SERVICE
+  TRANSFERRED
+}
+
+enum PurchaseType {
+  NEW_MOBILE
+  SPARES
+  USED_PHONE
+}
+
+enum PaymentStatus {
+  PAID
+  PARTIAL
+  CREDIT
+}
+
+enum PaymentRefType {
+  PURCHASE
+  SALE
+}
+
+enum PaymentMode {
+  CASH
+  UPI
+  CARD
+  BANK
+  CREDIT
+}
+
+enum PhoneEventType {
+  PURCHASED
+  SOLD
+  EXCHANGED_IN
+  EXCHANGED_OUT
+  SERVICE_IN
+  SERVICE_OUT
+  TRANSFERRED
+}
+
+enum SaleType {
+  NEW_MOBILE
+  USED_PHONE
+}
+
+enum ServiceType {
+  SELF_WITH_SPARES
+  SELF_LABOUR
+  SUBCONTRACT
+}
+
+model Employee {
+  id           String     @id @default(cuid())
+  name         String
+  phone        String?
+  username     String     @unique
+  passwordHash String
+  role         Role       @default(EMPLOYEE)
+  active       Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  purchases    Purchase[]
+  sales        Sale[]
+  serviceJobs  ServiceJob[]
+  expenses     Expense[]
+}
+
+model Supplier {
+  id            String     @id @default(cuid())
+  name          String
+  phone         String?
+  gstin         String?
+  address       String?
+  creditBalance Decimal    @default(0) @db.Decimal(12, 2)
+  active        Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  purchases     Purchase[]
+}
+
+model Customer {
+  id            String       @id @default(cuid())
+  name          String
+  phone         String?
+  altPhone      String?
+  address       String?
+  city          String?
+  gstin         String?
+  creditBalance Decimal      @default(0) @db.Decimal(12, 2)
+  notes         String?
+  active        Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  purchases     Purchase[]
+  sales         Sale[]
+  serviceJobs   ServiceJob[]
+  phoneEvents   PhoneEvent[]
+}
+
+model Product {
+  id           String          @id @default(cuid())
+  sku          String          @unique
+  name         String
+  brand        String
+  model        String?
+  category     ProductCategory
+  taxPercent   Decimal         @default(18) @db.Decimal(5, 2)
+  mrp          Decimal?        @db.Decimal(12, 2)
+  sellPrice    Decimal?        @db.Decimal(12, 2)
+  stockQty     Int             @default(0)
+  reorderLevel Int             @default(2)
+  location     String?
+  /// Mobile specs
+  ram          String?
+  rom          String?
+  color        String?
+  network      String?
+  processor    String?
+  /// Spare / accessory
+  spareType    String?
+  spareGrade   String?
+  specNote     String?
+  active       Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  purchaseItems PurchaseItem[]
+  phoneUnits   PhoneUnit[]
+  saleItems    SaleItem[]
+  serviceSpares ServiceSpare[]
+}
+
+model PhoneUnit {
+  id             String       @id @default(cuid())
+  imei           String       @unique
+  productId      String
+  product        Product      @relation(fields: [productId], references: [id])
+  status         PhoneStatus  @default(IN_STOCK)
+  cost           Decimal      @db.Decimal(12, 2)
+  /// Asking / suggested retail — shown on sale; cost stays hidden there
+  suggestedSellPrice Decimal? @db.Decimal(12, 2)
+  purchaseItemId String?
+  purchaseItem   PurchaseItem? @relation(fields: [purchaseItemId], references: [id])
+  color          String?
+  conditionNote  String?
+  purchasedAt    DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  events         PhoneEvent[]
+  saleItems      SaleItem[]
+  exchanges      Exchange[]
+  serviceJobs    ServiceJob[]
+}
+
+model PhoneEvent {
+  id         String         @id @default(cuid())
+  phoneUnitId String
+  phoneUnit  PhoneUnit      @relation(fields: [phoneUnitId], references: [id])
+  type       PhoneEventType
+  note       String?
+  customerId String?
+  customer   Customer?      @relation(fields: [customerId], references: [id])
+  supplierId String?
+  refType    String?
+  refId      String?
+  createdAt  DateTime       @default(now())
+  createdBy  String?
+}
+
+model Purchase {
+  id            String        @id @default(cuid())
+  type          PurchaseType
+  supplierId    String?
+  supplier      Supplier?     @relation(fields: [supplierId], references: [id])
+  customerId    String?
+  customer      Customer?     @relation(fields: [customerId], references: [id])
+  invoiceNo     String?
+  purchaseDate  DateTime      @default(now())
+  subtotal      Decimal       @db.Decimal(12, 2)
+  discount      Decimal       @default(0) @db.Decimal(12, 2)
+  tax           Decimal       @default(0) @db.Decimal(12, 2)
+  grandTotal    Decimal       @db.Decimal(12, 2)
+  paidAmount    Decimal       @default(0) @db.Decimal(12, 2)
+  creditAmount  Decimal       @default(0) @db.Decimal(12, 2)
+  paymentStatus PaymentStatus @default(PAID)
+  notes         String?
+  createdById   String
+  createdBy     Employee      @relation(fields: [createdById], references: [id])
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  items         PurchaseItem[]
+  payments      Payment[]
+}
+
+model PurchaseItem {
+  id         String      @id @default(cuid())
+  purchaseId String
+  purchase   Purchase    @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product     @relation(fields: [productId], references: [id])
+  qty        Int
+  unitCost   Decimal     @db.Decimal(12, 2)
+  discount   Decimal     @default(0) @db.Decimal(12, 2)
+  tax        Decimal     @default(0) @db.Decimal(12, 2)
+  lineTotal  Decimal     @db.Decimal(12, 2)
+  isBulk     Boolean     @default(false)
+  imeiList   String[]    @default([])
+  phoneUnits PhoneUnit[]
+}
+
+model Payment {
+  id          String         @id @default(cuid())
+  refType     PaymentRefType
+  purchaseId  String?
+  purchase    Purchase?      @relation(fields: [purchaseId], references: [id])
+  saleId      String?
+  sale        Sale?          @relation(fields: [saleId], references: [id])
+  amount      Decimal        @db.Decimal(12, 2)
+  mode        PaymentMode    @default(CASH)
+  paidAt      DateTime       @default(now())
+  note        String?
+  createdAt   DateTime       @default(now())
+}
+
+model Sale {
+  id            String        @id @default(cuid())
+  type          SaleType
+  customerId    String?
+  customer      Customer?     @relation(fields: [customerId], references: [id])
+  invoiceNo     String?
+  saleDate      DateTime      @default(now())
+  subtotal      Decimal       @default(0) @db.Decimal(12, 2)
+  discount      Decimal       @default(0) @db.Decimal(12, 2)
+  tax           Decimal       @default(0) @db.Decimal(12, 2)
+  grandTotal    Decimal       @default(0) @db.Decimal(12, 2)
+  paidAmount    Decimal       @default(0) @db.Decimal(12, 2)
+  creditAmount  Decimal       @default(0) @db.Decimal(12, 2)
+  paymentStatus PaymentStatus @default(PAID)
+  hasExchange   Boolean       @default(false)
+  hasFinance    Boolean       @default(false)
+  notes         String?
+  createdById   String
+  createdBy     Employee      @relation(fields: [createdById], references: [id])
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  items         SaleItem[]
+  exchanges     Exchange[]
+  financePlan   FinancePlan?
+  payments      Payment[]
+}
+
+model SaleItem {
+  id          String     @id @default(cuid())
+  saleId      String
+  sale        Sale       @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId   String?
+  product     Product?   @relation(fields: [productId], references: [id])
+  phoneUnitId String?
+  phoneUnit   PhoneUnit? @relation(fields: [phoneUnitId], references: [id])
+  qty         Int        @default(1)
+  unitPrice   Decimal    @db.Decimal(12, 2)
+  discount    Decimal    @default(0) @db.Decimal(12, 2)
+  tax         Decimal    @default(0) @db.Decimal(12, 2)
+  lineTotal   Decimal    @db.Decimal(12, 2)
+}
+
+model Exchange {
+  id              String     @id @default(cuid())
+  saleId          String
+  sale            Sale       @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  incomingPhoneId String?
+  incomingPhone   PhoneUnit? @relation(fields: [incomingPhoneId], references: [id])
+  brand           String?
+  model           String?
+  imei            String?
+  agreedValue     Decimal    @db.Decimal(12, 2)
+  conditionNote   String?
+  createdAt       DateTime   @default(now())
+}
+
+model FinancePlan {
+  id            String   @id @default(cuid())
+  saleId        String   @unique
+  sale          Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  financierName String
+  advanceAmount Decimal  @db.Decimal(12, 2)
+  financedAmount Decimal @db.Decimal(12, 2)
+  tenureMonths  Int?
+  emiAmount     Decimal? @db.Decimal(12, 2)
+  approvalRef   String?
+  notes         String?
+  createdAt     DateTime @default(now())
+}
+
+model ServiceJob {
+  id                String       @id @default(cuid())
+  type              ServiceType  @default(SELF_LABOUR)
+  ticketNo          String       @unique
+  customerId        String?
+  customer          Customer?    @relation(fields: [customerId], references: [id])
+  phoneUnitId       String?
+  phoneUnit         PhoneUnit?   @relation(fields: [phoneUnitId], references: [id])
+  deviceBrand       String?
+  deviceModel       String?
+  imei              String?
+  issue             String?
+  labourCharge      Decimal      @default(0) @db.Decimal(12, 2)
+  spareCost         Decimal      @default(0) @db.Decimal(12, 2)
+  subcontractCost   Decimal      @default(0) @db.Decimal(12, 2)
+  customerCharge    Decimal      @default(0) @db.Decimal(12, 2)
+  estimateAmount    Decimal      @default(0) @db.Decimal(12, 2)
+  advanceAmount     Decimal      @default(0) @db.Decimal(12, 2)
+  paidAmount        Decimal      @default(0) @db.Decimal(12, 2)
+  margin            Decimal      @default(0) @db.Decimal(12, 2)
+  timeMinutes       Int?
+  status            String       @default("BOOKED")
+  /// BOOKED → AT_SUBCONTRACT → READY → DELIVERED
+  subcontractorName String?
+  promisedDate      DateTime?
+  deliveredAt       DateTime?
+  createdById       String
+  createdBy         Employee     @relation(fields: [createdById], references: [id])
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  spares            ServiceSpare[]
+}
+
+model ServiceSpare {
+  id          String     @id @default(cuid())
+  serviceJobId String
+  serviceJob  ServiceJob @relation(fields: [serviceJobId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product    @relation(fields: [productId], references: [id])
+  qty         Int
+  unitCost    Decimal    @db.Decimal(12, 2)
+  lineTotal   Decimal    @db.Decimal(12, 2)
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  title       String
+  category    String?
+  amount      Decimal  @db.Decimal(12, 2)
+  expenseDate DateTime @default(now())
+  note        String?
+  createdById String?
+  createdBy   Employee? @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+model DailyClosing {
+  id           String   @id @default(cuid())
+  closingDate  DateTime @unique @db.Date
+  openingCash  Decimal  @default(0) @db.Decimal(12, 2)
+  closingCash  Decimal  @default(0) @db.Decimal(12, 2)
+  totalSales   Decimal  @default(0) @db.Decimal(12, 2)
+  totalPurchase Decimal @default(0) @db.Decimal(12, 2)
+  totalExpense Decimal  @default(0) @db.Decimal(12, 2)
+  notes        String?
+  createdAt    DateTime @default(now())
+}
+
+model CatalogBrand {
+  id        String         @id @default(cuid())
+  name      String         @unique
+  slug      String         @unique
+  source    String         @default("manual")
+  active    Boolean        @default(true)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  models    CatalogModel[]
+}
+
+model CatalogModel {
+  id        String       @id @default(cuid())
+  brandId   String
+  brand     CatalogBrand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  name      String
+  source    String       @default("manual")
+  active    Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  @@unique([brandId, name])
+  @@index([brandId])
+}
+
+/// Singleton shop + security + module settings (id always "default")
+model AppSettings {
+  id                 String   @id @default("default")
+  shopName           String   @default("SRI MOBILES")
+  shopPhone          String?
+  shopAddress        String?
+  shopCity           String?
+  shopGstin          String?
+  invoicePrefix      String   @default("INV")
+  defaultTaxPercent  Float    @default(18)
+  /// Restrict employee login to shop geo-fence (admin always allowed)
+  geoLoginEnabled    Boolean  @default(false)
+  geoLatitude        Float?
+  geoLongitude       Float?
+  geoRadiusMeters    Int      @default(200)
+  modulePurchase     Boolean  @default(true)
+  moduleSale         Boolean  @default(true)
+  moduleService      Boolean  @default(true)
+  moduleStock        Boolean  @default(true)
+  moduleReports      Boolean  @default(true)
+  moduleCustomers    Boolean  @default(true)
+  moduleSuppliers    Boolean  @default(true)
+  moduleHistory      Boolean  @default(true)
+  moduleEmployees    Boolean  @default(true)
+  updatedAt          DateTime @updatedAt
+}

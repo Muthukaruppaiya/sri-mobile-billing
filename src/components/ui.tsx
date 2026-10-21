@@ -1,44 +1,29 @@
-import { motion } from 'framer-motion'
+import { useEffect } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import type { CSSProperties, ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, Check, CheckCircle2, type LucideIcon } from 'lucide-react'
+import { Check, X } from 'lucide-react'
 
 export function AmbientBackground() {
-  return (
-    <div className="app-bg" aria-hidden>
-      <div className="app-bg__grid" />
-      <div className="app-bg__orb app-bg__orb--a" />
-      <div className="app-bg__orb app-bg__orb--b" />
-    </div>
-  )
+  return <div className="app-bg" aria-hidden />
+}
+
+export function WireTag({ children = 'SRI MOBILES' }: { children?: ReactNode }) {
+  return <span className="wire-tag">{children}</span>
 }
 
 export function PageHeader({
   title,
   subtitle,
   action,
-  icon: Icon,
 }: {
   title: string
   subtitle?: string
   action?: ReactNode
-  icon?: LucideIcon
 }) {
   return (
-    <div className="row-between" style={{ marginBottom: 18 }}>
+    <div className="row-between" style={{ marginBottom: 10 }}>
       <div>
-        <motion.h1
-          className="page-title"
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.35 }}
-        >
-          {Icon ? (
-            <span className="page-title__icon" aria-hidden>
-              <Icon size={26} />
-            </span>
-          ) : null}
-          <span>{title}</span>
-        </motion.h1>
+        <h1 className="page-title">{title}</h1>
         {subtitle ? <p className="page-sub">{subtitle}</p> : null}
       </div>
       {action}
@@ -60,15 +45,12 @@ export function Panel({
   style?: CSSProperties
 }) {
   return (
-    <motion.div
+    <div
       className={`panel ${dashed ? 'panel--dashed' : ''} ${className}`.trim()}
       style={style}
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay }}
     >
       {children}
-    </motion.div>
+    </div>
   )
 }
 
@@ -106,26 +88,26 @@ export function SuccessBanner({
   onClose: () => void
 }) {
   return (
-    <motion.div
-      className="success-banner"
-      initial={{ opacity: 0, y: -12 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -8 }}
+    <Modal
+      open
+      title={title}
+      subtitle={detail || undefined}
+      onClose={onClose}
+      footer={
+        <button type="button" className="btn btn--primary" onClick={onClose}>
+          OK
+        </button>
+      }
     >
-      <div className="success-banner__copy">
-        <CheckCircle2 size={22} color="var(--brand-deep)" />
-        <div>
-          <strong>{title}</strong>
-          <p className="muted" style={{ margin: '4px 0 0', fontSize: 'var(--fs-sm)' }}>
-            {detail}
-          </p>
-        </div>
-      </div>
-      <button type="button" className="btn btn--ghost" style={{ padding: '8px 12px' }} onClick={onClose} aria-label="Dismiss">
-        <Check size={16} />
-      </button>
-    </motion.div>
+      <p className="muted" style={{ margin: 0 }}>
+        {detail || 'Saved successfully.'}
+      </p>
+    </Modal>
   )
+}
+
+export function TitleCount({ n }: { n: number }) {
+  return <span className="title-count">{n}</span>
 }
 
 export function FormActions({
@@ -147,7 +129,6 @@ export function FormActions({
     <div className="form-actions">
       {showBack && onBack ? (
         <button type="button" className="btn btn--ghost" onClick={onBack}>
-          <ArrowLeft size={16} />
           {backLabel}
         </button>
       ) : (
@@ -155,7 +136,6 @@ export function FormActions({
       )}
       <button type="button" className="btn btn--primary" disabled={nextDisabled} onClick={onNext}>
         {nextLabel}
-        <ArrowRight size={16} />
       </button>
     </div>
   )
@@ -166,28 +146,24 @@ export function ModeTabs<T extends string>({
   value,
   onChange,
 }: {
-  tabs: { id: T; label: string; icon?: LucideIcon }[]
+  tabs: { id: T; label: string }[]
   value: T
   onChange: (id: T) => void
 }) {
   return (
     <div className="mode-tabs" role="tablist">
-      {tabs.map((t) => {
-        const Icon = t.icon
-        return (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={value === t.id}
-            className={`mode-tab${value === t.id ? ' is-active' : ''}`}
-            onClick={() => onChange(t.id)}
-          >
-            {Icon ? <Icon size={16} /> : null}
-            {t.label}
-          </button>
-        )
-      })}
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          aria-selected={value === t.id}
+          className={`mode-tab${value === t.id ? ' is-active' : ''}`}
+          onClick={() => onChange(t.id)}
+        >
+          {t.label}
+        </button>
+      ))}
     </div>
   )
 }
@@ -198,21 +174,16 @@ export function MiniStat({
   hint,
   tone = 'default',
   onClick,
-  icon: Icon,
 }: {
   label: string
   value: string
   hint?: string
   tone?: 'default' | 'warn' | 'ok' | 'info'
   onClick?: () => void
-  icon?: LucideIcon
 }) {
   const body = (
     <>
-      <div className="mini-stat__label">
-        {Icon ? <Icon size={14} /> : null}
-        {label}
-      </div>
+      <div className="mini-stat__label">{label}</div>
       <div className="mini-stat__value">{value}</div>
       {hint ? <div className="mini-stat__hint">{hint}</div> : null}
     </>
@@ -225,4 +196,71 @@ export function MiniStat({
     )
   }
   return <div className={`mini-stat mini-stat--${tone}`}>{body}</div>
+}
+
+export function Modal({
+  open,
+  title,
+  subtitle,
+  onClose,
+  children,
+  footer,
+  wide,
+}: {
+  open: boolean
+  title: string
+  subtitle?: string
+  onClose: () => void
+  children: ReactNode
+  footer?: ReactNode
+  wide?: boolean
+}) {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  return (
+    <AnimatePresence>
+      {open ? (
+        <motion.div
+          className="modal-root"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+        >
+          <button type="button" className="modal-backdrop" aria-label="Close" onClick={onClose} />
+          <motion.div
+            className={`modal-panel${wide ? ' modal-panel--wide' : ''}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-title"
+            initial={{ opacity: 0, y: 18, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.98 }}
+            transition={{ duration: 0.22 }}
+          >
+            <div className="modal-panel__head">
+              <div>
+                <h2 id="modal-title" className="modal-panel__title">
+                  {title}
+                </h2>
+                {subtitle ? <p className="modal-panel__sub">{subtitle}</p> : null}
+              </div>
+              <button type="button" className="modal-panel__close" onClick={onClose} aria-label="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-panel__body">{children}</div>
+            {footer ? <div className="modal-panel__footer">{footer}</div> : null}
+          </motion.div>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  )
 }

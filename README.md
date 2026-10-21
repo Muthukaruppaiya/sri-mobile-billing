@@ -1,37 +1,72 @@
 # SRI MOBILES — Billing Software
 
-Phase 1 wireframe for **SRI MOBILES** shop billing, service desk, and stock handling.
-
-## Live demo (GitHub Pages)
-
-https://muthukaruppaiya.github.io/sri-mobile-billing/
+Phase 1: **Auth + PostgreSQL + Purchase** (new mobile / spares / used phone) with live stock.
 
 ## Stack
 
 - React + TypeScript (Vite)
-- React Router
-- Framer Motion
-- Node backend planned for Phase 2
+- Node.js (Express) + Prisma
+- PostgreSQL (local or Docker)
 
-## Screens
+## Demo logins
 
-| Route | Screen |
-|-------|--------|
-| `/` | Brand splash |
-| `/app` | Home dashboard |
-| `/app/billing` | Sale bill |
-| `/app/service` | Service + delivery bill |
-| `/app/stock` | Stock maintenance |
-| `/app/history` | Bills history |
-| `/app/customers` | Customers |
+| User | Password | Role |
+|------|----------|------|
+| `admin` | `admin123` | Admin |
+| `counter1` | `emp123` | Employee |
+| `counter2` | `emp123` | Employee |
 
-## Run locally
+## Setup (Windows — local Postgres 16)
+
+Database was created as:
+
+- DB: `sri_mobiles`
+- User: `sri` / `sri123`
+
+If needed:
+
+```sql
+CREATE ROLE sri LOGIN PASSWORD 'sri123' CREATEDB;
+CREATE DATABASE sri_mobiles OWNER sri;
+```
+
+Or with Docker (if installed):
 
 ```bash
+docker compose up -d
+```
+
+## Run
+
+```bash
+# API
+cd server
+npm install
+npx prisma db push
+npm run seed
+npm run dev
+
+# UI (new terminal, repo root)
 npm install
 npm run dev
 ```
 
-## Deploy
+- Frontend: http://localhost:5173  
+- API: http://localhost:4000/api/health  
 
-Push to `main` — GitHub Actions builds and publishes to GitHub Pages automatically.
+Vite proxies `/api` → `http://localhost:4000`.
+
+## Phase 1 features
+
+- Login (admin / employee)
+- Purchase: New mobile, Spares, Used phone (bulk IMEI, tax, discount, credit)
+- Stock (products + phone units)
+- Suppliers
+- Employees (admin)
+- Reports: stock value + today’s purchase summary
+
+## Next phases
+
+- **Phase 2:** Sale (new/used, exchange, finance)
+- **Phase 3:** Service (self spares / labour / subcontract)
+- **Reports:** P&L, ageing, daily expenses

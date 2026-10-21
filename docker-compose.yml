@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sri-mobiles-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: sri
+      POSTGRES_PASSWORD: sri123
+      POSTGRES_DB: sri_mobiles
+    volumes:
+      - sri_pg_data:/var/lib/postgresql/data
+
+volumes:
+  sri_pg_data:

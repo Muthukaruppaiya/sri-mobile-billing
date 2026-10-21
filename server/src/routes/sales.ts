@@ -1,0 +1,428 @@
+import { Router } from 'express'
+import { z } from 'zod'
+import {
+  PaymentMode,
+  PaymentStatus,
+  PhoneEventType,
+  PhoneStatus,
+  ProductCategory,
+  SaleType,
+} from '@prisma/client'
+import { prisma } from '../prisma.js'
+import { requireAuth } from '../middleware/auth.js'
+import { round2, splitInclusive } from '../lib/money.js'
+
+export const salesRouter = Router()
+salesRouter.use(requireAuth)
+
+
+const saleInclude = {
+  customer: true,
+  createdBy: { select: { id: true, name: true } },
+  items: { include: { product: true, phoneUnit: { include: { product: true } } } },
+  exchanges: true,
+  financePlan: true,
+  payments: { orderBy: { paidAt: 'desc' as const } },
+}
+
+const createSchema = z.object({
+  type: z.nativeEnum(SaleType),
+  customerId: z.string().min(1).optional(),
+  createCustomer: z
+    .object({
+      name: z.string().min(1),
+      phone: z.string().optional(),
+    })
+    .optional(),
+  invoiceNo: z.string().optional(),
+  discount: z.number().nonnegative().default(0),
+  paidAmount: z.number().nonnegative().default(0),
+  paymentMode: z.nativeEnum(PaymentMode).default(PaymentMode.CASH),
+  notes: z.string().optional(),
+  items: z
+    .array(
+      z.object({
+        phoneUnitId: z.string().optional(),
+        productId: z.string().optional(),
+        qty: z.number().int().positive().default(1),
+        unitPrice: z.number().nonnegative(),
+        discount: z.number().nonnegative().default(0),
+        taxPercent: z.number().nonnegative().default(18),
+      }),
+    )
+    .min(1),
+  exchange: z
+    .object({
+      brand: z.string().min(1),
+      model: z.string().min(1),
+      imei: z.string().min(5),
+      agreedValue: z.number().nonnegative(),
+      color: z.string().optional(),
+      conditionNote: z.string().optional(),
+      ram: z.string().optional(),
+      rom: z.string().optional(),
+      network: z.string().optional(),
+    })
+    .optional(),
+  finance: z
+    .object({
+      financierName: z.string().min(1),
+      advanceAmount: z.number().nonnegative(),
+      financedAmount: z.number().nonnegative(),
+      tenureMonths: z.number().int().positive().optional(),
+      emiAmount: z.number().nonnegative().optional(),
+      approvalRef: z.string().optional(),
+      notes: z.string().optional(),
+    })
+    .optional(),
+})
+
+salesRouter.get('/', async (req, res) => {
+  const type = req.query.type as SaleType | undefined
+  const list = await prisma.sale.findMany({
+    where: type ? { type } : undefined,
+    include: saleInclude,
+    orderBy: { saleDate: 'desc' },
+    take: 100,
+  })
+  res.json(list)
+})
+
+salesRouter.get('/:id', async (req, res) => {
+  const sale = await prisma.sale.findUnique({
+    where: { id: req.params.id },
+    include: saleInclude,
+  })
+  if (!sale) {
+    res.status(404).json({ error: 'Sale not found' })
+    return
+  }
+  res.json(sale)
+})
+
+salesRouter.post('/', async (req, res) => {
+  const parsed = createSchema.safeParse(req.body)
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() })
+    return
+  }
+  const data = parsed.data
+  const userId = req.user!.id
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      let customerId = data.customerId
+      if (data.createCustomer) {
+        const phone = data.createCustomer.phone?.trim()
+        const existing = phone
+          ? await tx.customer.findFirst({
+              where: { active: true, OR: [{ phone }, { altPhone: phone }] },
+            })
+          : null
+        if (existing) {
+          customerId = existing.id
+          if (data.createCustomer.name.trim() && data.createCustomer.name.trim() !== existing.name) {
+            await tx.customer.update({
+              where: { id: existing.id },
+              data: { name: data.createCustomer.name.trim() },
+            })
+          }
+        } else {
+          const c = await tx.customer.create({
+            data: {
+              name: data.createCustomer.name.trim(),
+              phone: phone || undefined,
+            },
+          })
+          customerId = c.id
+        }
+      } else if (customerId) {
+        const c = await tx.customer.findUnique({ where: { id: customerId } })
+        if (!c) throw new Error('Customer not found')
+      }
+
+      const lines: Array<{
+        productId?: string
+        phoneUnitId?: string
+        qty: number
+        unitPrice: number
+        discount: number
+        tax: number
+        lineTotal: number
+      }> = []
+
+      for (const item of data.items) {
+        if (item.phoneUnitId) {
+          const unit = await tx.phoneUnit.findUnique({
+            where: { id: item.phoneUnitId },
+            include: { product: true },
+          })
+          if (!unit) throw new Error('Phone unit not found')
+          if (unit.status !== PhoneStatus.IN_STOCK) throw new Error(`IMEI ${unit.imei} not in stock`)
+          const charged = round2(Math.max(item.unitPrice * item.qty - item.discount, 0))
+          const { tax, incl: lineTotal } = splitInclusive(charged, item.taxPercent)
+          lines.push({
+            productId: unit.productId,
+            phoneUnitId: unit.id,
+            qty: item.qty,
+            unitPrice: item.unitPrice,
+            discount: item.discount,
+            tax,
+            lineTotal,
+          })
+        } else if (item.productId) {
+          const product = await tx.product.findUnique({ where: { id: item.productId } })
+          if (!product) throw new Error('Product not found')
+          if (product.stockQty < item.qty) throw new Error(`Insufficient stock for ${product.name}`)
+          const charged = round2(Math.max(item.unitPrice * item.qty - item.discount, 0))
+          const { tax, incl: lineTotal } = splitInclusive(charged, item.taxPercent)
+          lines.push({
+            productId: product.id,
+            qty: item.qty,
+            unitPrice: item.unitPrice,
+            discount: item.discount,
+            tax,
+            lineTotal,
+          })
+        } else {
+          throw new Error('Each sale line needs phoneUnitId or productId')
+        }
+      }
+
+      const itemsIncl = round2(lines.reduce((s, l) => s + l.lineTotal, 0))
+      const itemsTax = round2(lines.reduce((s, l) => s + l.tax, 0))
+      const exchangeValue = data.exchange ? round2(data.exchange.agreedValue) : 0
+      const billDiscount = round2(data.discount + exchangeValue)
+      // Amount due after exchange (customer cash + optional finance log)
+      const grandTotal = round2(Math.max(itemsIncl - billDiscount, 0))
+      const tax = itemsIncl > 0 ? round2(itemsTax * (grandTotal / itemsIncl)) : 0
+      const itemsSubtotal = round2(grandTotal - tax)
+      const cashPaid = round2(Math.min(Math.max(data.paidAmount, 0), grandTotal))
+      // Finance is a log only: company remits remaining to the shop — not shop EMI
+      const financedCover = data.finance ? round2(Math.max(grandTotal - cashPaid, 0)) : 0
+      const paidAmount = cashPaid
+      const creditAmount = data.finance ? 0 : round2(Math.max(grandTotal - cashPaid, 0))
+      const paymentStatus: PaymentStatus = data.finance
+        ? PaymentStatus.PAID
+        : creditAmount <= 0
+          ? PaymentStatus.PAID
+          : paidAmount > 0
+            ? PaymentStatus.PARTIAL
+            : PaymentStatus.CREDIT
+
+      const sale = await tx.sale.create({
+        data: {
+          type: data.type,
+          customerId,
+          invoiceNo: data.invoiceNo,
+          subtotal: itemsSubtotal,
+          discount: billDiscount,
+          tax,
+          grandTotal,
+          paidAmount,
+          creditAmount,
+          paymentStatus,
+          hasExchange: Boolean(data.exchange),
+          hasFinance: Boolean(data.finance),
+          notes: data.notes,
+          createdById: userId,
+        },
+      })
+
+      for (const line of lines) {
+        await tx.saleItem.create({
+          data: {
+            saleId: sale.id,
+            productId: line.productId,
+            phoneUnitId: line.phoneUnitId,
+            qty: line.qty,
+            unitPrice: line.unitPrice,
+            discount: line.discount,
+            tax: line.tax,
+            lineTotal: line.lineTotal,
+          },
+        })
+
+        if (line.phoneUnitId) {
+          const unit = await tx.phoneUnit.update({
+            where: { id: line.phoneUnitId },
+            data: { status: PhoneStatus.SOLD },
+          })
+          await tx.phoneEvent.create({
+            data: {
+              phoneUnitId: unit.id,
+              type: PhoneEventType.SOLD,
+              note: `Sale ${sale.id}`,
+              customerId,
+              refType: 'SALE',
+              refId: sale.id,
+              createdBy: userId,
+            },
+          })
+          await tx.product.update({
+            where: { id: unit.productId },
+            data: { stockQty: { decrement: 1 } },
+          })
+        } else if (line.productId) {
+          await tx.product.update({
+            where: { id: line.productId },
+            data: { stockQty: { decrement: line.qty } },
+          })
+        }
+      }
+
+      if (data.exchange) {
+        const ex = data.exchange
+        const tip = ex.imei.replace(/\W/g, '').slice(-8)
+        const sku = `UP-EX-${tip}`
+        const product = await tx.product.create({
+          data: {
+            sku,
+            name: ex.model,
+            brand: ex.brand,
+            model: ex.model,
+            category: ProductCategory.USED_PHONE,
+            sellPrice: ex.agreedValue,
+            reorderLevel: 0,
+            stockQty: 1,
+            ram: ex.ram,
+            rom: ex.rom,
+            color: ex.color,
+            network: ex.network,
+          },
+        })
+        const unit = await tx.phoneUnit.create({
+          data: {
+            imei: ex.imei.trim(),
+            productId: product.id,
+            status: PhoneStatus.IN_STOCK,
+            cost: ex.agreedValue,
+            color: ex.color,
+            conditionNote: ex.conditionNote,
+          },
+        })
+        await tx.phoneEvent.create({
+          data: {
+            phoneUnitId: unit.id,
+            type: PhoneEventType.EXCHANGED_IN,
+            note: `Exchange on sale ${sale.id}`,
+            customerId,
+            refType: 'SALE',
+            refId: sale.id,
+            createdBy: userId,
+          },
+        })
+        await tx.exchange.create({
+          data: {
+            saleId: sale.id,
+            incomingPhoneId: unit.id,
+            brand: ex.brand,
+            model: ex.model,
+            imei: ex.imei.trim(),
+            agreedValue: ex.agreedValue,
+            conditionNote: ex.conditionNote,
+          },
+        })
+      }
+
+      if (data.finance) {
+        await tx.financePlan.create({
+          data: {
+            saleId: sale.id,
+            financierName: data.finance.financierName,
+            advanceAmount: data.finance.advanceAmount,
+            financedAmount: financedCover || data.finance.financedAmount,
+            tenureMonths: data.finance.tenureMonths,
+            emiAmount: data.finance.emiAmount,
+            approvalRef: data.finance.approvalRef,
+            notes: data.finance.notes || 'Finance company remits remaining amount to shop',
+          },
+        })
+      }
+
+      if (cashPaid > 0) {
+        await tx.payment.create({
+          data: {
+            refType: 'SALE',
+            saleId: sale.id,
+            amount: cashPaid,
+            mode: data.paymentMode,
+            note: data.finance
+              ? 'In-hand cash · finance company remits rest to shop'
+              : 'Initial payment on sale',
+          },
+        })
+      }
+
+      if (creditAmount > 0 && customerId) {
+        await tx.customer.update({
+          where: { id: customerId },
+          data: { creditBalance: { increment: creditAmount } },
+        })
+      }
+
+      return tx.sale.findUnique({ where: { id: sale.id }, include: saleInclude })
+    })
+
+    res.status(201).json(result)
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Failed to create sale'
+    res.status(400).json({ error: message })
+  }
+})
+
+salesRouter.post('/:id/payments', async (req, res) => {
+  const body = z
+    .object({
+      amount: z.number().positive(),
+      mode: z.nativeEnum(PaymentMode).default(PaymentMode.CASH),
+      note: z.string().optional(),
+    })
+    .safeParse(req.body)
+
+  if (!body.success) {
+    res.status(400).json({ error: body.error.flatten() })
+    return
+  }
+
+  try {
+    const updated = await prisma.$transaction(async (tx) => {
+      const sale = await tx.sale.findUnique({ where: { id: req.params.id } })
+      if (!sale) throw new Error('Sale not found')
+      if (Number(sale.creditAmount) <= 0) throw new Error('No credit pending')
+
+      const amount = round2(Math.min(body.data.amount, Number(sale.creditAmount)))
+      await tx.payment.create({
+        data: {
+          refType: 'SALE',
+          saleId: sale.id,
+          amount,
+          mode: body.data.mode,
+          note: body.data.note || 'Credit settlement',
+        },
+      })
+
+      const paidAmount = round2(Number(sale.paidAmount) + amount)
+      const creditAmount = round2(Number(sale.grandTotal) - paidAmount)
+      const paymentStatus: PaymentStatus =
+        creditAmount <= 0 ? PaymentStatus.PAID : PaymentStatus.PARTIAL
+
+      if (sale.customerId) {
+        await tx.customer.update({
+          where: { id: sale.customerId },
+          data: { creditBalance: { decrement: amount } },
+        })
+      }
+
+      return tx.sale.update({
+        where: { id: sale.id },
+        data: { paidAmount, creditAmount, paymentStatus },
+        include: saleInclude,
+      })
+    })
+    res.json(updated)
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Payment failed'
+    res.status(400).json({ error: message })
+  }
+})
