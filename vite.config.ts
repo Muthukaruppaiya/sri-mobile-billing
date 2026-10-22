@@ -3,7 +3,8 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
   plugins: [react()],
-  base: process.env.NODE_ENV === 'production' ? '/sri-mobile-billing/' : '/',
+  // Served from the site root on the app server; GitHub Pages sets VITE_BASE=/sri-mobile-billing/
+  base: process.env.VITE_BASE || '/',
   server: {
     proxy: {
       '/api': {

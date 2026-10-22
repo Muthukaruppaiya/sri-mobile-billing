@@ -15,8 +15,11 @@ import { SalePage } from './pages/Sale'
 import { SaleHistoryPage } from './pages/SaleHistory'
 import { ServicePage } from './pages/Service'
 import { ServiceDeliveryPage } from './pages/ServiceDelivery'
+import { ServiceTicketsPage } from './pages/ServiceTickets'
+import { ServiceTicketPage } from './pages/ServiceTicket'
 import { CustomersPage } from './pages/Customers'
 import { SettingsPage } from './pages/Settings'
+import { PrintPage } from './pages/Print'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,7 +27,7 @@ const queryClient = new QueryClient({
   },
 })
 
-const basename = import.meta.env.PROD ? '/sri-mobile-billing' : '/'
+const basename = import.meta.env.BASE_URL.replace(/\/$/, '') || '/'
 
 export default function App() {
   return (
@@ -34,6 +37,7 @@ export default function App() {
           <BrowserRouter basename={basename}>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/print/:kind/:id" element={<PrintPage />} />
               <Route path="/" element={<Navigate to="/login" replace />} />
               <Route path="/app" element={<AppShell />}>
                 <Route index element={<DashboardPage />} />
@@ -57,6 +61,8 @@ export default function App() {
 
                 <Route path="service" element={<Navigate to="/app/service/booking" replace />} />
                 <Route path="service/booking" element={<ServicePage />} />
+                <Route path="service/tickets" element={<ServiceTicketsPage />} />
+                <Route path="service/tickets/:id" element={<ServiceTicketPage />} />
                 <Route path="service/delivery" element={<ServiceDeliveryPage />} />
                 <Route
                   path="service/:kind"

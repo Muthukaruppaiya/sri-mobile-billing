@@ -1,6 +1,8 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '../prisma.js'
+import { zodMessage } from '../lib/http.js'
+import { findCustomerByPhone, normalizePhone } from '../lib/customers.js'
 import { requireAuth } from '../middleware/auth.js'
 
 export const customersRouter = Router()
@@ -76,21 +78,16 @@ customersRouter.post('/', async (req, res) => {
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
-  const phone = body.data.phone?.trim()
+  const phone = normalizePhone(body.data.phone)
   if (phone) {
-    const existing = await prisma.customer.findFirst({
-      where: {
-        active: true,
-        OR: [{ phone }, { altPhone: phone }],
-      },
-    })
+    const existing = await findCustomerByPhone(prisma, phone)
     if (existing) {
       res.status(409).json({
-        error: 'Customer with this phone already exists',
+        error: `${existing.name} already uses this phone number`,
         customer: existing,
       })
       return
@@ -101,7 +98,7 @@ customersRouter.post('/', async (req, res) => {
     data: {
       name: body.data.name.trim(),
       phone: phone || undefined,
-      altPhone: body.data.altPhone?.trim() || undefined,
+      altPhone: normalizePhone(body.data.altPhone) || undefined,
       address: body.data.address?.trim() || undefined,
       city: body.data.city?.trim() || undefined,
       gstin: body.data.gstin?.trim() || undefined,
@@ -126,17 +123,60 @@ customersRouter.patch('/:id', async (req, res) => {
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
+  }
+
+  const data = { ...body.data }
+  if (data.phone !== undefined) data.phone = data.phone ? normalizePhone(data.phone) : null
+  if (data.altPhone !== undefined) data.altPhone = data.altPhone ? normalizePhone(data.altPhone) : null
+  if (data.name !== undefined) data.name = data.name.trim()
+
+  if (data.phone) {
+    const clash = await findCustomerByPhone(prisma, data.phone)
+    if (clash && clash.id !== req.params.id) {
+      res.status(409).json({ error: `${clash.name} already uses this phone number` })
+      return
+    }
   }
 
   try {
     const updated = await prisma.customer.update({
       where: { id: req.params.id },
-      data: body.data,
+      data,
     })
     res.json(updated)
   } catch {
     res.status(404).json({ error: 'Customer not found' })
   }
+})
+
+/** Everything billed to one customer — sales, service tickets and buy-ins. */
+customersRouter.get('/:id/history', async (req, res) => {
+  const id = req.params.id
+  const [customer, sales, services, purchases] = await Promise.all([
+    prisma.customer.findUnique({ where: { id } }),
+    prisma.sale.findMany({
+      where: { customerId: id },
+      orderBy: { saleDate: 'desc' },
+      take: 50,
+      include: { items: { include: { product: true, phoneUnit: true } } },
+    }),
+    prisma.serviceJob.findMany({
+      where: { customerId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    }),
+    prisma.purchase.findMany({
+      where: { customerId: id },
+      orderBy: { purchaseDate: 'desc' },
+      take: 50,
+      include: { items: { include: { product: true } } },
+    }),
+  ])
+  if (!customer) {
+    res.status(404).json({ error: 'Customer not found' })
+    return
+  }
+  res.json({ customer, sales, services, purchases })
 })

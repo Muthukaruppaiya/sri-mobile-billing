@@ -11,10 +11,12 @@ import {
 import { prisma } from '../prisma.js'
 import { requireAuth } from '../middleware/auth.js'
 import { round2, splitInclusive } from '../lib/money.js'
+import { resolveCustomer } from '../lib/customers.js'
+import { nextInvoiceNo } from '../lib/sequence.js'
+import { intakePhoneUnit, takeStock, uniqueSku } from '../lib/stock.js'
 
 export const salesRouter = Router()
 salesRouter.use(requireAuth)
-
 
 const saleInclude = {
   customer: true,
@@ -34,7 +36,6 @@ const createSchema = z.object({
       phone: z.string().optional(),
     })
     .optional(),
-  invoiceNo: z.string().optional(),
   discount: z.number().nonnegative().default(0),
   paidAmount: z.number().nonnegative().default(0),
   paymentMode: z.nativeEnum(PaymentMode).default(PaymentMode.CASH),
@@ -55,7 +56,7 @@ const createSchema = z.object({
     .object({
       brand: z.string().min(1),
       model: z.string().min(1),
-      imei: z.string().min(5),
+      imei: z.string().trim().min(5, 'Exchange IMEI looks too short'),
       agreedValue: z.number().nonnegative(),
       color: z.string().optional(),
       conditionNote: z.string().optional(),
@@ -83,7 +84,7 @@ salesRouter.get('/', async (req, res) => {
     where: type ? { type } : undefined,
     include: saleInclude,
     orderBy: { saleDate: 'desc' },
-    take: 100,
+    take: 300,
   })
   res.json(list)
 })
@@ -103,43 +104,22 @@ salesRouter.get('/:id', async (req, res) => {
 salesRouter.post('/', async (req, res) => {
   const parsed = createSchema.safeParse(req.body)
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() })
+    res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid sale' })
     return
   }
   const data = parsed.data
   const userId = req.user!.id
 
+  if (data.paymentMode === PaymentMode.CREDIT && data.paidAmount > 0) {
+    res.status(400).json({
+      error: 'Mode "Credit" means nothing is paid now — set in-hand to 0 or pick Cash / UPI',
+    })
+    return
+  }
+
   try {
     const result = await prisma.$transaction(async (tx) => {
-      let customerId = data.customerId
-      if (data.createCustomer) {
-        const phone = data.createCustomer.phone?.trim()
-        const existing = phone
-          ? await tx.customer.findFirst({
-              where: { active: true, OR: [{ phone }, { altPhone: phone }] },
-            })
-          : null
-        if (existing) {
-          customerId = existing.id
-          if (data.createCustomer.name.trim() && data.createCustomer.name.trim() !== existing.name) {
-            await tx.customer.update({
-              where: { id: existing.id },
-              data: { name: data.createCustomer.name.trim() },
-            })
-          }
-        } else {
-          const c = await tx.customer.create({
-            data: {
-              name: data.createCustomer.name.trim(),
-              phone: phone || undefined,
-            },
-          })
-          customerId = c.id
-        }
-      } else if (customerId) {
-        const c = await tx.customer.findUnique({ where: { id: customerId } })
-        if (!c) throw new Error('Customer not found')
-      }
+      const customerId = await resolveCustomer(tx, data, { renameExisting: true })
 
       const lines: Array<{
         productId?: string
@@ -151,20 +131,23 @@ salesRouter.post('/', async (req, res) => {
         lineTotal: number
       }> = []
 
+      const seenUnits = new Set<string>()
       for (const item of data.items) {
         if (item.phoneUnitId) {
+          if (seenUnits.has(item.phoneUnitId)) throw new Error('Same phone added twice')
+          seenUnits.add(item.phoneUnitId)
           const unit = await tx.phoneUnit.findUnique({
             where: { id: item.phoneUnitId },
             include: { product: true },
           })
           if (!unit) throw new Error('Phone unit not found')
-          if (unit.status !== PhoneStatus.IN_STOCK) throw new Error(`IMEI ${unit.imei} not in stock`)
+          if (unit.status !== PhoneStatus.IN_STOCK) throw new Error(`IMEI ${unit.imei} is not in stock`)
           const charged = round2(Math.max(item.unitPrice * item.qty - item.discount, 0))
           const { tax, incl: lineTotal } = splitInclusive(charged, item.taxPercent)
           lines.push({
             productId: unit.productId,
             phoneUnitId: unit.id,
-            qty: item.qty,
+            qty: 1,
             unitPrice: item.unitPrice,
             discount: item.discount,
             tax,
@@ -192,6 +175,9 @@ salesRouter.post('/', async (req, res) => {
       const itemsIncl = round2(lines.reduce((s, l) => s + l.lineTotal, 0))
       const itemsTax = round2(lines.reduce((s, l) => s + l.tax, 0))
       const exchangeValue = data.exchange ? round2(data.exchange.agreedValue) : 0
+      if (exchangeValue > itemsIncl) {
+        throw new Error('Exchange value cannot be more than the bill amount')
+      }
       const billDiscount = round2(data.discount + exchangeValue)
       // Amount due after exchange (customer cash + optional finance log)
       const grandTotal = round2(Math.max(itemsIncl - billDiscount, 0))
@@ -202,6 +188,9 @@ salesRouter.post('/', async (req, res) => {
       const financedCover = data.finance ? round2(Math.max(grandTotal - cashPaid, 0)) : 0
       const paidAmount = cashPaid
       const creditAmount = data.finance ? 0 : round2(Math.max(grandTotal - cashPaid, 0))
+      if (creditAmount > 0 && !customerId) {
+        throw new Error('Customer is required when part of the bill is on credit')
+      }
       const paymentStatus: PaymentStatus = data.finance
         ? PaymentStatus.PAID
         : creditAmount <= 0
@@ -210,11 +199,13 @@ salesRouter.post('/', async (req, res) => {
             ? PaymentStatus.PARTIAL
             : PaymentStatus.CREDIT
 
+      const invoiceNo = await nextInvoiceNo(tx)
+
       const sale = await tx.sale.create({
         data: {
           type: data.type,
           customerId,
-          invoiceNo: data.invoiceNo,
+          invoiceNo,
           subtotal: itemsSubtotal,
           discount: billDiscount,
           tax,
@@ -244,45 +235,44 @@ salesRouter.post('/', async (req, res) => {
         })
 
         if (line.phoneUnitId) {
-          const unit = await tx.phoneUnit.update({
-            where: { id: line.phoneUnitId },
+          // Conditional update so two counters cannot sell the same IMEI at once
+          const sold = await tx.phoneUnit.updateMany({
+            where: { id: line.phoneUnitId, status: PhoneStatus.IN_STOCK },
             data: { status: PhoneStatus.SOLD },
           })
+          if (sold.count === 0) throw new Error('Phone was just sold on another bill')
           await tx.phoneEvent.create({
             data: {
-              phoneUnitId: unit.id,
+              phoneUnitId: line.phoneUnitId,
               type: PhoneEventType.SOLD,
-              note: `Sale ${sale.id}`,
+              note: `Sale ${invoiceNo}`,
               customerId,
               refType: 'SALE',
               refId: sale.id,
               createdBy: userId,
             },
           })
-          await tx.product.update({
-            where: { id: unit.productId },
+          await tx.product.updateMany({
+            where: { id: line.productId, stockQty: { gt: 0 } },
             data: { stockQty: { decrement: 1 } },
           })
         } else if (line.productId) {
-          await tx.product.update({
-            where: { id: line.productId },
-            data: { stockQty: { decrement: line.qty } },
-          })
+          await takeStock(tx, line.productId, line.qty, 'item')
         }
       }
 
       if (data.exchange) {
         const ex = data.exchange
         const tip = ex.imei.replace(/\W/g, '').slice(-8)
-        const sku = `UP-EX-${tip}`
         const product = await tx.product.create({
           data: {
-            sku,
+            sku: await uniqueSku(tx, `UP-EX-${tip}`),
             name: ex.model,
             brand: ex.brand,
             model: ex.model,
             category: ProductCategory.USED_PHONE,
             sellPrice: ex.agreedValue,
+            taxPercent: 0,
             reorderLevel: 0,
             stockQty: 1,
             ram: ex.ram,
@@ -291,21 +281,18 @@ salesRouter.post('/', async (req, res) => {
             network: ex.network,
           },
         })
-        const unit = await tx.phoneUnit.create({
-          data: {
-            imei: ex.imei.trim(),
-            productId: product.id,
-            status: PhoneStatus.IN_STOCK,
-            cost: ex.agreedValue,
-            color: ex.color,
-            conditionNote: ex.conditionNote,
-          },
+        const unit = await intakePhoneUnit(tx, {
+          imei: ex.imei,
+          productId: product.id,
+          cost: ex.agreedValue,
+          color: ex.color,
+          conditionNote: ex.conditionNote,
         })
         await tx.phoneEvent.create({
           data: {
             phoneUnitId: unit.id,
             type: PhoneEventType.EXCHANGED_IN,
-            note: `Exchange on sale ${sale.id}`,
+            note: `Exchange on sale ${invoiceNo}`,
             customerId,
             refType: 'SALE',
             refId: sale.id,
@@ -374,14 +361,18 @@ salesRouter.post('/', async (req, res) => {
 salesRouter.post('/:id/payments', async (req, res) => {
   const body = z
     .object({
-      amount: z.number().positive(),
+      amount: z.number().positive('Enter an amount'),
       mode: z.nativeEnum(PaymentMode).default(PaymentMode.CASH),
       note: z.string().optional(),
     })
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: body.error.issues[0]?.message || 'Invalid payment' })
+    return
+  }
+  if (body.data.mode === PaymentMode.CREDIT) {
+    res.status(400).json({ error: 'Choose how the money was received (cash, UPI…)' })
     return
   }
 
@@ -403,7 +394,7 @@ salesRouter.post('/:id/payments', async (req, res) => {
       })
 
       const paidAmount = round2(Number(sale.paidAmount) + amount)
-      const creditAmount = round2(Number(sale.grandTotal) - paidAmount)
+      const creditAmount = round2(Math.max(Number(sale.creditAmount) - amount, 0))
       const paymentStatus: PaymentStatus =
         creditAmount <= 0 ? PaymentStatus.PAID : PaymentStatus.PARTIAL
 

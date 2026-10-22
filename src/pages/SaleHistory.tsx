@@ -1,21 +1,25 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { ShoppingBag } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Printer, ShoppingBag } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Sale } from '../lib/types'
 import { formatINR } from '../lib/types'
+import { formatDateTime, PAYMENT_MODE_LABEL } from '../lib/format'
+import { openDoc } from '../lib/print'
 import { MiniStat, Modal, PageHeader, Panel } from '../components/ui'
-import { SearchField } from '../components/SearchableSelect'
+import { ComboSelect, PAYMENT_MODES, SearchField } from '../components/SearchableSelect'
 import { matchesQuery } from '../lib/search'
 import { specSummary } from '../lib/productSpecs'
 
-type Filter = 'ALL' | 'NEW_MOBILE' | 'USED_PHONE' | 'FINANCE'
+type Filter = 'ALL' | 'NEW_MOBILE' | 'USED_PHONE' | 'FINANCE' | 'DUE'
 
 const typeLabel: Record<Sale['type'], string> = {
   NEW_MOBILE: 'New mobile',
   USED_PHONE: 'Used phone',
 }
+
+const PAY_MODES = PAYMENT_MODES.filter((m) => m.id !== 'CREDIT')
 
 function itemsLabel(s: Sale) {
   const items = s.items || []
@@ -31,22 +35,39 @@ function itemsLabel(s: Sale) {
     .join(', ')
 }
 
+function statusChip(s: Sale) {
+  if (s.hasFinance) return { cls: 'chip--info', label: 'Finance' }
+  if (s.paymentStatus === 'PAID') return { cls: 'chip--live', label: 'Paid' }
+  return { cls: 'chip--warn', label: s.paymentStatus === 'PARTIAL' ? 'Partly paid' : 'Credit' }
+}
+
 export function SaleHistoryPage() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const [filter, setFilter] = useState<Filter>('ALL')
   const [q, setQ] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [payAmt, setPayAmt] = useState('')
+  const [payMode, setPayMode] = useState('CASH')
+  const [payError, setPayError] = useState('')
+  const [payMsg, setPayMsg] = useState('')
 
   const salesQ = useQuery({
     queryKey: ['sales', 'history'],
     queryFn: () => api<Sale[]>('/sales'),
   })
 
+  const all = useMemo(() => salesQ.data || [], [salesQ.data])
+
   const list = useMemo(() => {
-    const rows = salesQ.data || []
-    return rows.filter((s) => {
+    return all.filter((s) => {
       const fOk =
-        filter === 'ALL' || (filter === 'FINANCE' ? s.hasFinance : s.type === filter)
+        filter === 'ALL' ||
+        (filter === 'FINANCE'
+          ? s.hasFinance
+          : filter === 'DUE'
+            ? Number(s.creditAmount) > 0
+            : s.type === filter)
       const itemTerms =
         s.items?.flatMap((it) => [
           it.product?.name,
@@ -62,7 +83,6 @@ export function SaleHistoryPage() {
         s.customer?.name,
         s.customer?.phone,
         s.invoiceNo,
-        s.id,
         s.notes,
         typeLabel[s.type],
         s.financePlan?.financierName,
@@ -71,25 +91,51 @@ export function SaleHistoryPage() {
       )
       return fOk && qOk
     })
-  }, [salesQ.data, filter, q])
+  }, [all, filter, q])
 
-  const selected =
-    list.find((s) => s.id === selectedId) ||
-    (salesQ.data || []).find((s) => s.id === selectedId) ||
-    null
+  const selected = all.find((s) => s.id === selectedId) || null
 
-  const financed = (salesQ.data || []).filter((s) => s.hasFinance)
-  const financeTotal = financed.reduce(
-    (sum, s) => sum + Number(s.financePlan?.financedAmount || 0),
-    0,
-  )
-  const grandTotal = (salesQ.data || []).reduce((sum, s) => sum + Number(s.grandTotal || 0), 0)
+  const receive = useMutation({
+    mutationFn: (id: string) =>
+      api<Sale>(`/sales/${id}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({ amount: Number(payAmt), mode: payMode }),
+      }),
+    onSuccess: (s) => {
+      qc.setQueryData<Sale[]>(['sales', 'history'], (prev) => prev?.map((x) => (x.id === s.id ? s : x)))
+      qc.invalidateQueries({ queryKey: ['sales'] })
+      qc.invalidateQueries({ queryKey: ['reports'] })
+      qc.invalidateQueries({ queryKey: ['customers'] })
+      setPayMsg(`Received ${formatINR(Number(payAmt))}`)
+      setPayAmt(Number(s.creditAmount) > 0 ? String(Number(s.creditAmount)) : '')
+      setPayError('')
+    },
+    onError: (e: Error) => setPayError(e.message),
+  })
+
+  function openSale(s: Sale) {
+    setSelectedId(s.id)
+    setPayAmt(Number(s.creditAmount) > 0 ? String(Number(s.creditAmount)) : '')
+    setPayMode('CASH')
+    setPayError('')
+    setPayMsg('')
+  }
+
+  const financed = all.filter((s) => s.hasFinance)
+  const financeTotal = financed.reduce((sum, s) => sum + Number(s.financePlan?.financedAmount || 0), 0)
+  const grandTotal = all.reduce((sum, s) => sum + Number(s.grandTotal || 0), 0)
+  const dueBills = all.filter((s) => Number(s.creditAmount) > 0)
+  const dueTotal = dueBills.reduce((sum, s) => sum + Number(s.creditAmount), 0)
+
+  const exchangeTotal = (selected?.exchanges || []).reduce((sum, ex) => sum + Number(ex.agreedValue || 0), 0)
+  const itemsTotal = (selected?.items || []).reduce((sum, it) => sum + Number(it.lineTotal || 0), 0)
+  const otherDiscount = selected ? Math.max(Number(selected.discount) - exchangeTotal, 0) : 0
 
   return (
     <div className="section-gap">
       <PageHeader
         title="Sale history"
-        subtitle="Bills · finance logs (company remits remaining to shop)"
+        subtitle="Invoices · finance logs · collect pending credit"
         action={
           <button type="button" className="btn btn--primary" onClick={() => navigate('/app/billing/new')}>
             <ShoppingBag size={18} /> New sale
@@ -98,11 +144,13 @@ export function SaleHistoryPage() {
       />
 
       <div className="mini-stat-grid">
+        <MiniStat label="Sales" value={String(salesQ.data?.length ?? '—')} hint={formatINR(grandTotal)} tone="ok" onClick={() => setFilter('ALL')} />
         <MiniStat
-          label="Sales"
-          value={String(salesQ.data?.length ?? '—')}
-          hint={formatINR(grandTotal)}
-          tone="ok"
+          label="Credit due"
+          value={formatINR(dueTotal)}
+          hint={`${dueBills.length} bills`}
+          tone="warn"
+          onClick={() => setFilter('DUE')}
         />
         <MiniStat
           label="Finance logs"
@@ -112,40 +160,30 @@ export function SaleHistoryPage() {
           onClick={() => setFilter('FINANCE')}
         />
         <MiniStat
-          label="New mobile"
-          value={String((salesQ.data || []).filter((s) => s.type === 'NEW_MOBILE').length)}
-          onClick={() => setFilter('NEW_MOBILE')}
-        />
-        <MiniStat
-          label="Used phone"
-          value={String((salesQ.data || []).filter((s) => s.type === 'USED_PHONE').length)}
-          onClick={() => setFilter('USED_PHONE')}
+          label="New / used"
+          value={`${all.filter((s) => s.type === 'NEW_MOBILE').length} / ${all.filter((s) => s.type === 'USED_PHONE').length}`}
         />
       </div>
 
-      <Panel style={{ padding: 16 }} delay={0.05}>
+      <Panel style={{ padding: 16 }}>
         <div className="search-toolbar">
-          <SearchField
-            value={q}
-            onChange={setQ}
-            placeholder="Search customer, IMEI, brand, financier…"
-          />
+          <SearchField value={q} onChange={setQ} placeholder="Search invoice, customer, IMEI, brand, financier…" />
         </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div className="filter-tabs" style={{ marginBottom: 12 }}>
           {(
             [
               ['ALL', 'All'],
               ['NEW_MOBILE', 'New'],
               ['USED_PHONE', 'Used'],
+              ['DUE', 'Credit due'],
               ['FINANCE', 'Finance log'],
             ] as [Filter, string][]
           ).map(([id, label]) => (
             <button
               key={id}
               type="button"
-              className={`chip ${filter === id ? 'chip--live' : ''}`}
-              style={{ cursor: 'pointer' }}
+              className={`filter-tab${filter === id ? ' is-active' : ''}`}
               onClick={() => setFilter(id)}
             >
               {label}
@@ -156,7 +194,7 @@ export function SaleHistoryPage() {
         {salesQ.isLoading ? (
           <div className="empty-state">Loading…</div>
         ) : list.length === 0 ? (
-          <div className="empty-state">No sales yet.</div>
+          <div className="empty-state">{q || filter !== 'ALL' ? 'No sales match.' : 'No sales yet.'}</div>
         ) : (
           <div className="table-wrap">
             <table className="data">
@@ -167,60 +205,66 @@ export function SaleHistoryPage() {
                   <th>Customer</th>
                   <th>Type</th>
                   <th>Items</th>
-                  <th>In-hand</th>
                   <th>Amount</th>
+                  <th>Paid</th>
+                  <th>Due</th>
                   <th>Status</th>
-                  <th>Action</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
-                {list.map((s) => (
-                  <tr key={s.id}>
-                    <td style={{ fontWeight: 600 }}>
-                      {new Date(s.saleDate).toLocaleDateString('en-IN')}
-                      <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
-                        {new Date(s.saleDate).toLocaleTimeString('en-IN', {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })}
-                      </div>
-                    </td>
-                    <td>{s.invoiceNo || s.id.slice(-6).toUpperCase()}</td>
-                    <td>
-                      <div>{s.customer?.name || 'Walk-in'}</div>
-                      <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
-                        {s.customer?.phone || ''}
-                      </div>
-                    </td>
-                    <td>
-                      {typeLabel[s.type]}
-                      {s.hasFinance ? (
+                {list.map((s) => {
+                  const chip = statusChip(s)
+                  const due = Number(s.creditAmount) || 0
+                  return (
+                    <tr key={s.id}>
+                      <td style={{ fontWeight: 600 }}>
+                        {new Date(s.saleDate).toLocaleDateString('en-IN')}
                         <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
-                          Finance
+                          {new Date(s.saleDate).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}
                         </div>
-                      ) : null}
-                    </td>
-                    <td className="cell-wrap">{itemsLabel(s)}</td>
-                    <td>{formatINR(s.paidAmount)}</td>
-                    <td style={{ fontWeight: 600 }}>{formatINR(s.grandTotal)}</td>
-                    <td>
-                      <span
-                        className={`chip ${s.hasFinance ? 'chip--info' : s.paymentStatus === 'PAID' ? 'chip--live' : 'chip--warn'}`}
-                      >
-                        {s.hasFinance ? 'Finance log' : s.paymentStatus}
-                      </span>
-                    </td>
-                    <td className="table-action">
-                      <button
-                        type="button"
-                        className="btn btn--sm btn--ghost"
-                        onClick={() => setSelectedId(s.id)}
-                      >
-                        Details
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                        {s.invoiceNo || s.id.slice(-6).toUpperCase()}
+                      </td>
+                      <td>
+                        <div>{s.customer?.name || 'Walk-in'}</div>
+                        <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
+                          {s.customer?.phone || ''}
+                        </div>
+                      </td>
+                      <td>
+                        {typeLabel[s.type]}
+                        {s.hasExchange ? (
+                          <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
+                            + exchange
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="cell-wrap">{itemsLabel(s)}</td>
+                      <td style={{ fontWeight: 600 }}>{formatINR(s.grandTotal)}</td>
+                      <td>{formatINR(s.paidAmount)}</td>
+                      <td>{due > 0 ? <strong className="danger">{formatINR(due)}</strong> : '—'}</td>
+                      <td>
+                        <span className={`chip ${chip.cls}`}>{chip.label}</span>
+                      </td>
+                      <td className="table-action">
+                        <div className="table-actions">
+                          <button type="button" className="btn btn--sm btn--ghost" onClick={() => openDoc('sale', s.id)}>
+                            <Printer size={12} /> Invoice
+                          </button>
+                          <button
+                            type="button"
+                            className={`btn btn--sm ${due > 0 ? 'btn--primary' : 'btn--ghost'}`}
+                            onClick={() => openSale(s)}
+                          >
+                            {due > 0 ? 'Receive' : 'Details'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -229,20 +273,37 @@ export function SaleHistoryPage() {
 
       <Modal
         open={Boolean(selected)}
-        title={selected?.customer?.name || 'Sale'}
+        title={selected ? `Invoice ${selected.invoiceNo || selected.id.slice(-6).toUpperCase()}` : 'Sale'}
         subtitle={
           selected
-            ? `${typeLabel[selected.type]}${selected.invoiceNo ? ` · Inv ${selected.invoiceNo}` : ''}${
-                selected.customer?.phone ? ` · ${selected.customer.phone}` : ''
+            ? `${selected.customer?.name || 'Walk-in'}${selected.customer?.phone ? ` · ${selected.customer.phone}` : ''} · ${
+                typeLabel[selected.type]
               }`
             : undefined
         }
         onClose={() => setSelectedId(null)}
         wide
         footer={
-          <button type="button" className="btn btn--ghost" onClick={() => setSelectedId(null)}>
-            Close
-          </button>
+          selected ? (
+            <>
+              <button type="button" className="btn btn--ghost" onClick={() => setSelectedId(null)}>
+                Close
+              </button>
+              <button type="button" className="btn btn--ghost" onClick={() => openDoc('sale', selected.id)}>
+                <Printer size={14} /> Invoice
+              </button>
+              {Number(selected.creditAmount) > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={receive.isPending || !(Number(payAmt) > 0)}
+                  onClick={() => receive.mutate(selected.id)}
+                >
+                  {receive.isPending ? 'Saving…' : `Receive ${formatINR(Number(payAmt) || 0)}`}
+                </button>
+              ) : null}
+            </>
+          ) : null
         }
       >
         {selected ? (
@@ -250,71 +311,96 @@ export function SaleHistoryPage() {
             <div className="detail-card is-selected">
               <div className="row-between">
                 <strong>{selected.customer?.name || 'Walk-in'}</strong>
-                <span
-                  className={`chip ${selected.hasFinance ? 'chip--info' : selected.paymentStatus === 'PAID' ? 'chip--live' : 'chip--warn'}`}
-                >
-                  {selected.hasFinance ? 'Finance log' : selected.paymentStatus}
-                </span>
+                <span className={`chip ${statusChip(selected).cls}`}>{statusChip(selected).label}</span>
               </div>
               <p className="muted" style={{ margin: '4px 0 0', fontSize: 'var(--fs-xs)' }}>
-                {new Date(selected.saleDate).toLocaleString('en-IN')}
-                {selected.createdBy ? ` · ${selected.createdBy.name}` : ''}
+                {formatDateTime(selected.saleDate)}
+                {selected.createdBy ? ` · billed by ${selected.createdBy.name}` : ''}
               </p>
             </div>
 
+            {payMsg ? <p className="settings-toast settings-toast--ok">{payMsg}</p> : null}
+
+            {Number(selected.creditAmount) > 0 ? (
+              <div className="settle-box">
+                <h3 className="section-title" style={{ fontSize: '0.95rem' }}>
+                  Receive pending {formatINR(selected.creditAmount)}
+                </h3>
+                <div className="purchase-fields">
+                  <label>
+                    Amount ₹
+                    <input
+                      type="number"
+                      min={1}
+                      max={Number(selected.creditAmount)}
+                      value={payAmt}
+                      onChange={(e) => setPayAmt(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Mode
+                    <ComboSelect value={payMode} placeholder="Mode" options={PAY_MODES} onChange={(v) => setPayMode(v || 'CASH')} />
+                  </label>
+                </div>
+                {payError ? (
+                  <p className="danger" style={{ margin: '8px 0 0', fontSize: 'var(--fs-sm)' }}>
+                    {payError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="totals-box">
               <div className="totals-row">
-                <span>Taxable</span>
-                <span>{formatINR(selected.subtotal)}</span>
+                <span>Items total</span>
+                <span>{formatINR(itemsTotal)}</span>
+              </div>
+              {exchangeTotal > 0 ? (
+                <div className="totals-row">
+                  <span>Less exchange</span>
+                  <span>− {formatINR(exchangeTotal)}</span>
+                </div>
+              ) : null}
+              {otherDiscount > 0 ? (
+                <div className="totals-row">
+                  <span>Less discount</span>
+                  <span>− {formatINR(otherDiscount)}</span>
+                </div>
+              ) : null}
+              <div className="totals-row totals-row--grand">
+                <span>Net amount</span>
+                <span>{formatINR(selected.grandTotal)}</span>
               </div>
               <div className="totals-row">
-                <span>GST (included)</span>
-                <span>{formatINR(selected.tax)}</span>
+                <span className="muted">Taxable · GST included</span>
+                <span className="muted">
+                  {formatINR(selected.subtotal)} · {formatINR(selected.tax)}
+                </span>
               </div>
               <div className="totals-row">
-                <span>Amount charged</span>
-                <span>{formatINR(Number(selected.subtotal) + Number(selected.tax))}</span>
-              </div>
-              <div className="totals-row">
-                <span>Discount / exchange</span>
-                <span>{formatINR(selected.discount)}</span>
-              </div>
-              <div className="totals-row">
-                <span>In-hand cash</span>
+                <span>Paid</span>
                 <span>{formatINR(selected.paidAmount)}</span>
               </div>
               {selected.financePlan ? (
-                <div className="totals-row totals-row--grand">
+                <div className="totals-row">
                   <span>Finance pays shop</span>
                   <span>{formatINR(selected.financePlan.financedAmount)}</span>
                 </div>
-              ) : (
-                <div className="totals-row totals-row--grand">
-                  <span>Grand / due</span>
-                  <span>
-                    {formatINR(selected.grandTotal)}
-                    {Number(selected.creditAmount) > 0
-                      ? ` · ${formatINR(selected.creditAmount)} due`
-                      : ''}
-                  </span>
-                </div>
-              )}
+              ) : null}
+              <div className="totals-row totals-row--grand">
+                <span>Balance due</span>
+                <span className={Number(selected.creditAmount) > 0 ? 'danger' : ''}>
+                  {formatINR(selected.creditAmount)}
+                </span>
+              </div>
             </div>
 
             {selected.financePlan ? (
               <div className="settle-box">
-                <h3 className="section-title" style={{ fontSize: '0.95rem' }}>
-                  Finance log
-                </h3>
                 <p style={{ margin: 0, fontSize: 'var(--fs-sm)' }}>
-                  {selected.financePlan.financierName} remits{' '}
+                  <strong>{selected.financePlan.financierName}</strong> remits{' '}
                   {formatINR(selected.financePlan.financedAmount)} to the shop.
-                  {selected.financePlan.approvalRef
-                    ? ` Ref ${selected.financePlan.approvalRef}.`
-                    : ''}
-                </p>
-                <p className="muted" style={{ margin: '6px 0 0', fontSize: 'var(--fs-xs)' }}>
-                  Not EMI. Customer due is ₹0. Shop only records that finance will pay the rest.
+                  {selected.financePlan.approvalRef ? ` Ref ${selected.financePlan.approvalRef}.` : ''}
                 </p>
               </div>
             ) : null}
@@ -339,7 +425,7 @@ export function SaleHistoryPage() {
                     <tr>
                       <th>Item</th>
                       <th>Qty</th>
-                      <th>Line</th>
+                      <th>Amount</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -351,7 +437,8 @@ export function SaleHistoryPage() {
                           <td className="cell-wrap">
                             {product?.brand} {product?.name}
                             <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
-                              {it.phoneUnit?.imei || specs || product?.sku}
+                              {[it.phoneUnit?.imei ? `IMEI ${it.phoneUnit.imei}` : '', specs].filter(Boolean).join(' · ') ||
+                                product?.sku}
                             </div>
                           </td>
                           <td>{it.qty}</td>
@@ -359,6 +446,36 @@ export function SaleHistoryPage() {
                         </tr>
                       )
                     })}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {selected.payments?.length ? (
+              <div className="table-wrap">
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>Payment date</th>
+                      <th>Mode</th>
+                      <th>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selected.payments.map((p) => (
+                      <tr key={p.id}>
+                        <td>
+                          {formatDateTime(p.paidAt)}
+                          {p.note ? (
+                            <div className="muted" style={{ fontSize: 'var(--fs-xs)' }}>
+                              {p.note}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td>{PAYMENT_MODE_LABEL[p.mode] || p.mode}</td>
+                        <td>{formatINR(p.amount)}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>

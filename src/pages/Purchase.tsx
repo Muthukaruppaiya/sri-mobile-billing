@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Navigate, useParams } from 'react-router-dom'
+import { Link, Navigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence } from 'framer-motion'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Printer, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Product, Purchase, PurchaseType, Supplier } from '../lib/types'
-import { formatINR } from '../lib/types'
+import { formatINR, partyName } from '../lib/types'
+import { openDoc } from '../lib/print'
+import { uid } from '../lib/uid'
 import { Modal, SuccessBanner, TitleCount } from '../components/ui'
 import { splitInclusive } from '../lib/money'
 import { ComboSelect, PAYMENT_MODES, SearchableSelect } from '../components/SearchableSelect'
@@ -72,7 +74,7 @@ type ProductDraft = {
 
 function emptyLine(taxPercent = 18): LineDraft {
   return {
-    key: crypto.randomUUID(),
+    key: uid(),
     productId: '',
     brand: '',
     model: '',
@@ -122,7 +124,7 @@ export function PurchasePage() {
   const mode: PurchaseType = resolved || 'NEW_MOBILE'
   const isUsed = mode === 'USED_PHONE'
   const qc = useQueryClient()
-  const [done, setDone] = useState<string | null>(null)
+  const [done, setDone] = useState<Purchase | null>(null)
   const [error, setError] = useState('')
   const [partySource, setPartySource] = useState<PartySource>('SUPPLIER')
   const [supplierId, setSupplierId] = useState('')
@@ -132,7 +134,6 @@ export function PurchasePage() {
   const [paidAmount, setPaidAmount] = useState(0)
   const [paymentMode, setPaymentMode] = useState('CASH')
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()])
-  const [newSupplier, setNewSupplier] = useState({ name: '', phone: '' })
   const [walkIn, setWalkIn] = useState<CustomerDraft>(emptyCustomerDraft)
   const [addProductOpen, setAddProductOpen] = useState(false)
   const [addProductForLine, setAddProductForLine] = useState<string | null>(null)
@@ -195,19 +196,6 @@ export function PurchasePage() {
       })),
     [products],
   )
-
-  const createSupplier = useMutation({
-    mutationFn: () =>
-      api<Supplier>('/suppliers', {
-        method: 'POST',
-        body: JSON.stringify(newSupplier),
-      }),
-    onSuccess: (s) => {
-      qc.invalidateQueries({ queryKey: ['suppliers'] })
-      setSupplierId(s.id)
-      setNewSupplier({ name: '', phone: '' })
-    },
-  })
 
   const defaultProductCategory =
     mode === 'NEW_MOBILE' ? 'NEW_PHONE' : mode === 'SPARES' ? 'SPARE' : 'USED_PHONE'
@@ -338,7 +326,7 @@ export function PurchasePage() {
           ...(fromCustomer ? customerPayload(walkIn) : { supplierId }),
           invoiceNo: invoiceNo || undefined,
           discount: billDiscount,
-          paidAmount,
+          paidAmount: paymentMode === 'CREDIT' ? 0 : paidAmount,
           paymentMode,
           notes: notes || undefined,
           items,
@@ -346,7 +334,8 @@ export function PurchasePage() {
       })
     },
     onSuccess: (p) => {
-      setDone(`Purchase saved · ${formatINR(p.grandTotal)} · ${p.paymentStatus}`)
+      setDone(p)
+      setPaymentMode('CASH')
       setLines([emptyLine(isUsed ? 0 : 18)])
       setInvoiceNo('')
       setNotes('')
@@ -374,9 +363,10 @@ export function PurchasePage() {
       tax += splitInclusive(charged, l.taxPercent).tax
     }
     const grand = Math.max(sub - billDiscount, 0)
-    const credit = Math.max(grand - paidAmount, 0)
+    const paid = paymentMode === 'CREDIT' ? 0 : Math.min(paidAmount, grand)
+    const credit = Math.max(grand - paid, 0)
     return { sub, tax, grand, credit }
-  }, [lines, billDiscount, paidAmount, mode])
+  }, [lines, billDiscount, paidAmount, mode, paymentMode])
 
   function updateLine(key: string, patch: Partial<LineDraft>) {
     setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)))
@@ -441,7 +431,22 @@ export function PurchasePage() {
         </div>
         <AnimatePresence>
           {done ? (
-            <SuccessBanner title="Purchase created successfully" detail={done} onClose={() => setDone(null)} />
+            <SuccessBanner
+              title="Purchase saved"
+              detail={`${partyName(done)} · ${formatINR(done.grandTotal)} · ${
+                Number(done.creditAmount) > 0 ? `${formatINR(done.creditAmount)} still to pay` : 'Paid'
+              }`}
+              onClose={() => setDone(null)}
+              actions={
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => openDoc('purchase', done.id, { autoPrint: true })}
+                >
+                  <Printer size={14} /> {done.customer ? 'Print voucher' : 'Print GRN'}
+                </button>
+              }
+            />
           ) : null}
         </AnimatePresence>
         {error ? <p className="purchase-desk__error">{error}</p> : null}
@@ -525,26 +530,11 @@ export function PurchasePage() {
                   />
                 </label>
               </div>
-              <div className="purchase-quick">
-                <input
-                  placeholder="New supplier name"
-                  value={newSupplier.name}
-                  onChange={(e) => setNewSupplier({ ...newSupplier, name: e.target.value })}
-                />
-                <input
-                  placeholder="Phone"
-                  value={newSupplier.phone}
-                  onChange={(e) => setNewSupplier({ ...newSupplier, phone: e.target.value })}
-                />
-                <button
-                  type="button"
-                  className="btn btn--ghost"
-                  disabled={!newSupplier.name || createSupplier.isPending}
-                  onClick={() => createSupplier.mutate()}
-                >
-                  Add
-                </button>
-              </div>
+              {!(suppliersQ.data || []).length && !suppliersQ.isLoading ? (
+                <p className="form-hint" style={{ marginTop: 8 }}>
+                  No vendors yet — add them in <Link to="/app/suppliers">Purchase › Vendors</Link>.
+                </p>
+              ) : null}
             </>
           )}
         </section>
@@ -569,7 +559,7 @@ export function PurchasePage() {
                 value={paymentMode}
                 placeholder="Type mode…"
                 options={[...PAYMENT_MODES]}
-                onChange={setPaymentMode}
+                onChange={(v) => setPaymentMode(v || 'CASH')}
               />
             </label>
             <label>
@@ -577,7 +567,8 @@ export function PurchasePage() {
               <input
                 type="number"
                 min={0}
-                value={paidAmount || ''}
+                disabled={paymentMode === 'CREDIT'}
+                value={paymentMode === 'CREDIT' ? '' : paidAmount || ''}
                 onChange={(e) => setPaidAmount(Number(e.target.value))}
                 onFocus={() => {
                   if (!paidAmount) setPaidAmount(Math.round(totals.grand))

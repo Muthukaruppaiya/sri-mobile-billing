@@ -15,7 +15,10 @@ export type Customer = {
   address?: string | null
   city?: string | null
   gstin?: string | null
+  /** Customer owes the shop */
   creditBalance: string | number
+  /** Shop owes the customer (used phone buy-in) */
+  payableBalance?: string | number
   notes?: string | null
   active?: boolean
   createdAt?: string
@@ -116,6 +119,8 @@ export type Sale = {
     id: string
     qty: number
     unitPrice: string | number
+    discount?: string | number
+    tax?: string | number
     lineTotal: string | number
     product?: Product | null
     phoneUnit?: PhoneUnit | null
@@ -126,6 +131,7 @@ export type Sale = {
     model?: string | null
     imei?: string | null
     agreedValue: string | number
+    conditionNote?: string | null
   }>
   financePlan?: {
     id: string
@@ -135,6 +141,55 @@ export type Sale = {
     approvalRef?: string | null
     notes?: string | null
   } | null
+  payments?: PurchasePayment[]
+}
+
+export type ServiceStatus =
+  | 'BOOKED'
+  | 'RECEIVED'
+  | 'IN_PROGRESS'
+  | 'AT_SUBCONTRACT'
+  | 'READY'
+  | 'DELIVERED'
+  | 'CANCELLED'
+
+export type ServiceJob = {
+  id: string
+  ticketNo: string
+  type: 'SELF_WITH_SPARES' | 'SELF_LABOUR' | 'SUBCONTRACT'
+  status: ServiceStatus
+  deviceBrand?: string | null
+  deviceModel?: string | null
+  imei?: string | null
+  issue?: string | null
+  accessories?: string | null
+  conditionNote?: string | null
+  notes?: string | null
+  labourCharge: number | string
+  spareCost: number | string
+  subcontractCost: number | string
+  customerCharge: number | string
+  estimateAmount?: number | string
+  advanceAmount: number | string
+  paidAmount: number | string
+  margin: number | string
+  timeMinutes?: number | null
+  subcontractorName?: string | null
+  promisedDate?: string | null
+  readyAt?: string | null
+  deliveredAt?: string | null
+  cancelledAt?: string | null
+  cancelReason?: string | null
+  createdAt: string
+  customer?: Customer | null
+  createdBy?: { id: string; name: string }
+  spares?: Array<{
+    id: string
+    qty: number
+    unitCost: number | string
+    lineTotal: number | string
+    product: Product
+  }>
   payments?: PurchasePayment[]
 }
 

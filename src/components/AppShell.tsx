@@ -81,7 +81,8 @@ const navModules: NavModule[] = [
     icon: Wrench,
     flag: 'moduleService',
     children: [
-      { to: '/app/service/booking', label: 'Booking / jobs' },
+      { to: '/app/service/booking', label: 'New booking' },
+      { to: '/app/service/tickets', label: 'Tickets' },
       { to: '/app/service/delivery', label: 'Delivery' },
     ],
   },
@@ -159,8 +160,9 @@ export function AppShell() {
 
   const isDesk =
     location.pathname.includes('/purchase/') ||
-    location.pathname.includes('/billing/') ||
-    location.pathname.includes('/service/')
+    (location.pathname.includes('/billing/') && !location.pathname.includes('/billing/history')) ||
+    location.pathname.includes('/service/booking') ||
+    location.pathname.includes('/service/delivery')
   const showSubs = navOpen
   const brandName = settings?.shopName || 'SRI MOBILES'
 

@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '../prisma.js'
+import { zodMessage } from '../lib/http.js'
 import { requireAuth, requireAdmin } from '../middleware/auth.js'
 
 export const settingsRouter = Router()
@@ -39,7 +40,15 @@ settingsRouter.patch('/', requireAdmin, async (req, res) => {
       shopAddress: z.string().nullable().optional(),
       shopCity: z.string().nullable().optional(),
       shopGstin: z.string().nullable().optional(),
-      invoicePrefix: z.string().min(1).optional(),
+      invoicePrefix: z
+        .string()
+        .trim()
+        .min(1, 'Invoice prefix is required')
+        .max(10)
+        .regex(/^[A-Za-z0-9/-]+$/, 'Invoice prefix: letters, numbers, - or / only')
+        .optional(),
+      invoiceTerms: z.string().max(1000).nullable().optional(),
+      serviceTerms: z.string().max(1000).nullable().optional(),
       defaultTaxPercent: z.number().nonnegative().optional(),
       geoLoginEnabled: z.boolean().optional(),
       geoLatitude: z.number().min(-90).max(90).nullable().optional(),
@@ -58,7 +67,7 @@ settingsRouter.patch('/', requireAdmin, async (req, res) => {
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 

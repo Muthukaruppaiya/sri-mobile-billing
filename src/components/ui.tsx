@@ -35,13 +35,11 @@ export function Panel({
   children,
   className = '',
   dashed = false,
-  delay = 0,
   style,
 }: {
   children: ReactNode
   className?: string
   dashed?: boolean
-  delay?: number
   style?: CSSProperties
 }) {
   return (
@@ -82,27 +80,61 @@ export function SuccessBanner({
   title,
   detail,
   onClose,
+  actions,
 }: {
   title: string
   detail: string
   onClose: () => void
+  /** Extra buttons, e.g. Print invoice */
+  actions?: ReactNode
 }) {
   return (
     <Modal
       open
       title={title}
-      subtitle={detail || undefined}
       onClose={onClose}
       footer={
-        <button type="button" className="btn btn--primary" onClick={onClose}>
-          OK
-        </button>
+        <>
+          {actions}
+          <button type="button" className={actions ? 'btn btn--ghost' : 'btn btn--primary'} onClick={onClose}>
+            {actions ? 'Close' : 'OK'}
+          </button>
+        </>
       }
     >
       <p className="muted" style={{ margin: 0 }}>
         {detail || 'Saved successfully.'}
       </p>
     </Modal>
+  )
+}
+
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: { id: T; label: string }[]
+  value: T
+  onChange: (id: T) => void
+  label?: string
+}) {
+  return (
+    <div className="seg" role="radiogroup" aria-label={label}>
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={value === o.id}
+          className={`seg__btn${value === o.id ? ' is-active' : ''}`}
+          onClick={() => onChange(o.id)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   )
 }
 

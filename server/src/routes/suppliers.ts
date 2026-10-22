@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '../prisma.js'
+import { zodMessage } from '../lib/http.js'
 import { requireAuth } from '../middleware/auth.js'
 
 export const suppliersRouter = Router()
@@ -25,7 +26,7 @@ suppliersRouter.post('/', async (req, res) => {
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
@@ -45,7 +46,7 @@ suppliersRouter.patch('/:id', async (req, res) => {
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 

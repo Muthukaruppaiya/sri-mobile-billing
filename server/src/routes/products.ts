@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { ProductCategory } from '@prisma/client'
 import { prisma } from '../prisma.js'
+import { zodMessage } from '../lib/http.js'
 import { requireAuth } from '../middleware/auth.js'
 
 export const productsRouter = Router()
@@ -66,7 +67,7 @@ productsRouter.post('/', async (req, res) => {
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
@@ -102,7 +103,7 @@ productsRouter.patch('/:id', async (req, res) => {
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 

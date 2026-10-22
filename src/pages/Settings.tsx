@@ -37,7 +37,9 @@ export function SettingsPage() {
           shopAddress: form!.shopAddress || null,
           shopCity: form!.shopCity || null,
           shopGstin: form!.shopGstin || null,
-          invoicePrefix: form!.invoicePrefix,
+          invoicePrefix: form!.invoicePrefix.trim(),
+          invoiceTerms: form!.invoiceTerms?.trim() || null,
+          serviceTerms: form!.serviceTerms?.trim() || null,
           defaultTaxPercent: Number(form!.defaultTaxPercent) || 0,
           geoLoginEnabled: form!.geoLoginEnabled,
           geoLatitude: form!.geoLatitude ?? null,
@@ -213,6 +215,12 @@ export function SettingsPage() {
                 Employees must be inside the shop radius to login. <strong>Admin is never
                 restricted.</strong>
               </p>
+              {!window.isSecureContext ? (
+                <p className="settings-toast settings-toast--err" style={{ marginBottom: 12 }}>
+                  This site is opened over plain http, so browsers block GPS. Keep location login OFF until the
+                  app runs on https — otherwise staff cannot sign in.
+                </p>
+              ) : null}
               <label className="settings-switch">
                 <input
                   type="checkbox"
@@ -320,7 +328,31 @@ export function SettingsPage() {
                 Invoice prefix
                 <input
                   value={form.invoicePrefix}
-                  onChange={(e) => setForm({ ...form, invoicePrefix: e.target.value })}
+                  maxLength={10}
+                  onChange={(e) => setForm({ ...form, invoicePrefix: e.target.value.toUpperCase() })}
+                />
+                <span className="form-hint">
+                  Next invoice: {(form.invoicePrefix || 'INV').trim()}-
+                  {String((form.invoiceSeq || 0) + 1).padStart(4, '0')} · next service ticket: SV-
+                  {String((form.serviceSeq || 0) + 1).padStart(4, '0')}
+                </span>
+              </label>
+              <label className="span-2">
+                Invoice terms (printed on sale invoices)
+                <textarea
+                  rows={4}
+                  value={form.invoiceTerms || ''}
+                  placeholder="Goods once sold will not be taken back… (leave blank for default)"
+                  onChange={(e) => setForm({ ...form, invoiceTerms: e.target.value })}
+                />
+              </label>
+              <label className="span-2">
+                Service terms (printed on job cards and service bills)
+                <textarea
+                  rows={4}
+                  value={form.serviceTerms || ''}
+                  placeholder="Not responsible for data loss… (leave blank for default)"
+                  onChange={(e) => setForm({ ...form, serviceTerms: e.target.value })}
                 />
               </label>
               <label className="span-2">

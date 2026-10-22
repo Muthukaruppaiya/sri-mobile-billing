@@ -39,17 +39,21 @@ docker compose up -d
 ## Run
 
 ```bash
-# API
-cd server
+# repo root — installs UI + server deps (and generates Prisma client)
 npm install
+
+# first time only: create tables + seed logins
+cd server
+copy .env.example .env
 npx prisma db push
 npm run seed
-npm run dev
+cd ..
 
-# UI (new terminal, repo root)
-npm install
+# starts API + UI together
 npm run dev
 ```
+
+`npm run dev:api` / `npm run dev:web` start either one alone.
 
 - Frontend: http://localhost:5173  
 - API: http://localhost:4000/api/health  

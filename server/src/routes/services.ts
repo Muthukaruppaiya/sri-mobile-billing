@@ -1,34 +1,114 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { ServiceType } from '@prisma/client'
+import { PaymentMode, ServiceType, type Prisma } from '@prisma/client'
 import { prisma } from '../prisma.js'
 import { requireAuth } from '../middleware/auth.js'
+import { round2 } from '../lib/money.js'
+import { zodMessage } from '../lib/http.js'
+import { resolveCustomer } from '../lib/customers.js'
+import { nextTicketNo } from '../lib/sequence.js'
+import { takeStock } from '../lib/stock.js'
 
 export const servicesRouter = Router()
 servicesRouter.use(requireAuth)
 
-function round2(n: number) {
-  return Math.round(n * 100) / 100
-}
+type Tx = Prisma.TransactionClient
 
-function ticketNo() {
-  const d = new Date()
-  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const rand = Math.floor(Math.random() * 9000 + 1000)
-  return `SV-${stamp}-${rand}`
-}
+/** Statuses where the device is still with us and work can be recorded */
+const WORK_OPEN = ['BOOKED', 'RECEIVED', 'IN_PROGRESS']
+const CANCELLABLE = [...WORK_OPEN, 'AT_SUBCONTRACT', 'READY']
+const CLOSED = ['DELIVERED', 'CANCELLED']
 
 const jobInclude = {
   customer: true,
   createdBy: { select: { id: true, name: true } },
   spares: { include: { product: true } },
   phoneUnit: { include: { product: true } },
+  payments: { orderBy: { paidAt: 'asc' as const } },
 }
 
-const spareSchema = z.object({
-  productId: z.string().min(1),
-  qty: z.number().int().positive(),
-  unitCost: z.number().nonnegative(),
+const modeSchema = z.nativeEnum(PaymentMode).default(PaymentMode.CASH)
+
+class HttpError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+function send(res: import('express').Response, e: unknown, fallback: string) {
+  if (e instanceof HttpError) {
+    res.status(e.status).json({ error: e.message })
+    return
+  }
+  res.status(400).json({ error: e instanceof Error ? e.message : fallback })
+}
+
+async function getJob(tx: Tx, id: string) {
+  const job = await tx.serviceJob.findUnique({ where: { id } })
+  if (!job) throw new HttpError(404, 'Service ticket not found')
+  return job
+}
+
+/** What the shop actually paid for the spares (latest purchase cost, else the price charged). */
+async function spareBuyCost(tx: Tx, productId: string, fallbackUnit: number) {
+  const last = await tx.purchaseItem.findFirst({
+    where: { productId },
+    orderBy: { purchase: { purchaseDate: 'desc' } },
+    select: { unitCost: true },
+  })
+  return last ? Number(last.unitCost) : fallbackUnit
+}
+
+async function recordPayment(
+  tx: Tx,
+  serviceJobId: string,
+  amount: number,
+  mode: PaymentMode,
+  note: string,
+) {
+  if (!amount) return
+  await tx.payment.create({
+    data: { refType: 'SERVICE', serviceJobId, amount: round2(amount), mode, note },
+  })
+}
+
+function rejectCreditMode(mode: PaymentMode, amount: number) {
+  if (mode === PaymentMode.CREDIT && amount > 0) {
+    throw new Error('Pick how the money was received (Cash / UPI / Card / Bank)')
+  }
+}
+
+servicesRouter.get('/', async (req, res) => {
+  const status = req.query.status as string | undefined
+  const statuses = status
+    ? status
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : undefined
+
+  const list = await prisma.serviceJob.findMany({
+    where: statuses?.length ? { status: { in: statuses } } : undefined,
+    include: jobInclude,
+    orderBy: { createdAt: 'desc' },
+    take: 300,
+  })
+  res.json(list)
+})
+
+servicesRouter.get('/:id', async (req, res) => {
+  const job = await prisma.serviceJob.findUnique({
+    where: { id: req.params.id },
+    include: jobInclude,
+  })
+  if (!job) {
+    res.status(404).json({ error: 'Service ticket not found' })
+    return
+  }
+  res.json(job)
 })
 
 /** Booking — first visit: customer + device + advance */
@@ -45,118 +125,112 @@ const bookSchema = z
     deviceModel: z.string().optional(),
     imei: z.string().optional(),
     issue: z.string().optional(),
+    accessories: z.string().optional(),
+    conditionNote: z.string().optional(),
     estimateAmount: z.number().nonnegative().default(0),
     advanceAmount: z.number().nonnegative().default(0),
-    paymentMode: z.string().optional(),
+    paymentMode: modeSchema,
     promisedDate: z.string().optional(),
     notes: z.string().optional(),
   })
   .refine((d) => Boolean(d.customerId) || Boolean(d.createCustomer?.name), {
-    message: 'customerId or createCustomer required',
+    message: 'Customer is required',
   })
 
-servicesRouter.get('/', async (req, res) => {
-  const status = req.query.status as string | undefined
-  const statuses = status
-    ? status.split(',').map((s) => s.trim()).filter(Boolean)
-    : undefined
-
-  const list = await prisma.serviceJob.findMany({
-    where: statuses?.length ? { status: { in: statuses } } : undefined,
-    include: jobInclude,
-    orderBy: { createdAt: 'desc' },
-    take: 150,
-  })
-  res.json(list)
-})
-
-servicesRouter.get('/:id', async (req, res) => {
-  const job = await prisma.serviceJob.findUnique({
-    where: { id: req.params.id },
-    include: jobInclude,
-  })
-  if (!job) {
-    res.status(404).json({ error: 'Service job not found' })
-    return
-  }
-  res.json(job)
-})
-
-/** Create booking ticket (status BOOKED) */
 servicesRouter.post('/', async (req, res) => {
   const parsed = bookSchema.safeParse(req.body)
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() })
+    res.status(400).json({ error: zodMessage(parsed.error) })
     return
   }
   const data = parsed.data
-  const userId = req.user!.id
   const advance = round2(data.advanceAmount)
 
   try {
+    rejectCreditMode(data.paymentMode, advance)
     const result = await prisma.$transaction(async (tx) => {
-      let customerId = data.customerId
-      if (data.createCustomer) {
-        const phone = data.createCustomer.phone?.trim()
-        const existing = phone
-          ? await tx.customer.findFirst({
-              where: { active: true, OR: [{ phone }, { altPhone: phone }] },
-            })
-          : null
-        if (existing) {
-          customerId = existing.id
-        } else {
-          const c = await tx.customer.create({
-            data: {
-              name: data.createCustomer.name.trim(),
-              phone: phone || undefined,
-            },
-          })
-          customerId = c.id
-        }
-      } else if (customerId) {
-        const c = await tx.customer.findUnique({ where: { id: customerId } })
-        if (!c) throw new Error('Customer not found')
-      }
+      const customerId = await resolveCustomer(tx, data)
+      const ticketNo = await nextTicketNo(tx)
 
-      let ticket = ticketNo()
-      for (let i = 0; i < 5; i++) {
-        const exists = await tx.serviceJob.findUnique({ where: { ticketNo: ticket } })
-        if (!exists) break
-        ticket = ticketNo()
-      }
-
-      return tx.serviceJob.create({
+      const job = await tx.serviceJob.create({
         data: {
           type: ServiceType.SELF_LABOUR,
-          ticketNo: ticket,
+          ticketNo,
           customerId,
-          deviceBrand: data.deviceBrand,
-          deviceModel: data.deviceModel,
-          imei: data.imei,
-          issue: data.issue || data.notes,
+          deviceBrand: data.deviceBrand?.trim() || undefined,
+          deviceModel: data.deviceModel?.trim() || undefined,
+          imei: data.imei?.trim() || undefined,
+          issue: data.issue?.trim() || undefined,
+          accessories: data.accessories?.trim() || undefined,
+          conditionNote: data.conditionNote?.trim() || undefined,
+          notes: data.notes?.trim() || undefined,
           estimateAmount: round2(data.estimateAmount),
           advanceAmount: advance,
           paidAmount: advance,
           customerCharge: 0,
           status: 'BOOKED',
           promisedDate: data.promisedDate ? new Date(data.promisedDate) : undefined,
-          createdById: userId,
+          createdById: req.user!.id,
         },
-        include: jobInclude,
       })
+      await recordPayment(tx, job.id, advance, data.paymentMode, 'Advance at booking')
+      return tx.serviceJob.findUnique({ where: { id: job.id }, include: jobInclude })
     })
 
     res.status(201).json(result)
   } catch (e) {
-    const message = e instanceof Error ? e.message : 'Failed to book service'
-    res.status(400).json({ error: message })
+    send(res, e, 'Failed to book service')
   }
 })
 
-async function loadJob(id: string) {
-  return prisma.serviceJob.findUnique({ where: { id }, include: jobInclude })
-}
+/** Edit intake details while the ticket is open */
+servicesRouter.patch('/:id', async (req, res) => {
+  const body = z
+    .object({
+      deviceBrand: z.string().nullable().optional(),
+      deviceModel: z.string().nullable().optional(),
+      imei: z.string().nullable().optional(),
+      issue: z.string().nullable().optional(),
+      accessories: z.string().nullable().optional(),
+      conditionNote: z.string().nullable().optional(),
+      notes: z.string().nullable().optional(),
+      estimateAmount: z.number().nonnegative().optional(),
+      promisedDate: z.string().nullable().optional(),
+    })
+    .safeParse(req.body)
+
+  if (!body.success) {
+    res.status(400).json({ error: zodMessage(body.error) })
+    return
+  }
+
+  try {
+    const existing = await getJob(prisma, req.params.id)
+    if (CLOSED.includes(existing.status)) throw new Error('Closed tickets cannot be edited')
+
+    const { promisedDate, ...rest } = body.data
+    const updated = await prisma.serviceJob.update({
+      where: { id: existing.id },
+      data: {
+        ...rest,
+        ...(promisedDate !== undefined
+          ? { promisedDate: promisedDate ? new Date(promisedDate) : null }
+          : {}),
+      },
+      include: jobInclude,
+    })
+    res.json(updated)
+  } catch (e) {
+    send(res, e, 'Failed to update ticket')
+  }
+})
+
+const spareSchema = z.object({
+  productId: z.string().min(1),
+  qty: z.number().int().positive(),
+  /** Price charged to the customer per unit */
+  unitPrice: z.number().nonnegative(),
+})
 
 /** With spares → deduct stock → READY (delivery queue) */
 servicesRouter.post('/:id/with-spares', async (req, res) => {
@@ -164,82 +238,65 @@ servicesRouter.post('/:id/with-spares', async (req, res) => {
     .object({
       labourCharge: z.number().nonnegative().default(0),
       timeMinutes: z.number().int().nonnegative().optional(),
-      spares: z.array(spareSchema).min(1),
+      spares: z.array(spareSchema).min(1, 'Add at least one spare'),
     })
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.serviceJob.findUnique({ where: { id: req.params.id } })
-      if (!existing) throw new Error('Service job not found')
-      if (!['BOOKED', 'RECEIVED', 'IN_PROGRESS'].includes(existing.status)) {
+      const existing = await getJob(tx, req.params.id)
+      if (!WORK_OPEN.includes(existing.status)) {
         throw new Error('Ticket is not open for spare work')
       }
 
-      let spareCost = 0
-      const spareRows: Array<{ productId: string; qty: number; unitCost: number; lineTotal: number }> =
-        []
-
+      let spareCharge = 0
+      let spareBuy = 0
       for (const s of body.data.spares) {
         const product = await tx.product.findUnique({ where: { id: s.productId } })
         if (!product) throw new Error('Spare product not found')
-        if (product.stockQty < s.qty) throw new Error(`Insufficient stock for ${product.name}`)
-        const lineTotal = round2(s.unitCost * s.qty)
-        spareCost += lineTotal
-        spareRows.push({
-          productId: s.productId,
-          qty: s.qty,
-          unitCost: s.unitCost,
-          lineTotal,
-        })
-      }
-      spareCost = round2(spareCost)
-      const labourCharge = round2(body.data.labourCharge)
-      // Total from customer = labour + spares
-      const customerCharge = round2(labourCharge + spareCost)
-      const margin = round2(customerCharge - spareCost - labourCharge - Number(existing.subcontractCost))
-
-      await tx.serviceSpare.deleteMany({ where: { serviceJobId: existing.id } })
-
-      for (const s of spareRows) {
+        await takeStock(tx, product.id, s.qty, product.name)
+        const lineTotal = round2(s.unitPrice * s.qty)
+        spareCharge += lineTotal
+        spareBuy += (await spareBuyCost(tx, product.id, s.unitPrice)) * s.qty
         await tx.serviceSpare.create({
           data: {
             serviceJobId: existing.id,
-            productId: s.productId,
+            productId: product.id,
             qty: s.qty,
-            unitCost: s.unitCost,
-            lineTotal: s.lineTotal,
+            unitCost: s.unitPrice,
+            lineTotal,
           },
         })
-        await tx.product.update({
-          where: { id: s.productId },
-          data: { stockQty: { decrement: s.qty } },
-        })
       }
+      spareCharge = round2(spareCharge)
+      const labourCharge = round2(body.data.labourCharge)
+      const customerCharge = round2(labourCharge + spareCharge)
+      if (customerCharge <= 0) throw new Error('Enter labour and/or spare amounts')
 
-      return tx.serviceJob.update({
+      await tx.serviceJob.update({
         where: { id: existing.id },
         data: {
           type: ServiceType.SELF_WITH_SPARES,
           labourCharge,
-          spareCost,
+          spareCost: spareCharge,
           customerCharge,
-          margin,
+          margin: round2(customerCharge - spareBuy - Number(existing.subcontractCost)),
           timeMinutes: body.data.timeMinutes,
           status: 'READY',
+          readyAt: new Date(),
         },
-        include: jobInclude,
       })
+      return tx.serviceJob.findUnique({ where: { id: existing.id }, include: jobInclude })
     })
 
     res.json(result)
   } catch (e) {
-    res.status(400).json({ error: e instanceof Error ? e.message : 'Failed' })
+    send(res, e, 'Failed to save spare work')
   }
 })
 
@@ -247,93 +304,77 @@ servicesRouter.post('/:id/with-spares', async (req, res) => {
 servicesRouter.post('/:id/without-spares', async (req, res) => {
   const body = z
     .object({
-      labourCharge: z.number().nonnegative(),
+      labourCharge: z.number().positive('Enter labour charge'),
       timeMinutes: z.number().int().nonnegative().optional(),
     })
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
-  const existing = await prisma.serviceJob.findUnique({ where: { id: req.params.id } })
-  if (!existing) {
-    res.status(404).json({ error: 'Service job not found' })
-    return
-  }
-  if (!['BOOKED', 'RECEIVED', 'IN_PROGRESS'].includes(existing.status)) {
-    res.status(400).json({ error: 'Ticket is not open for labour work' })
-    return
-  }
+  try {
+    const existing = await getJob(prisma, req.params.id)
+    if (!WORK_OPEN.includes(existing.status)) throw new Error('Ticket is not open for labour work')
 
-  const labourCharge = round2(body.data.labourCharge)
-  // Without spare: collect = labour charge
-  const customerCharge = labourCharge
-  const margin = round2(
-    customerCharge - Number(existing.spareCost) - labourCharge - Number(existing.subcontractCost),
-  )
-
-  const updated = await prisma.serviceJob.update({
-    where: { id: existing.id },
-    data: {
-      type: ServiceType.SELF_LABOUR,
-      labourCharge,
-      customerCharge,
-      margin,
-      timeMinutes: body.data.timeMinutes,
-      status: 'READY',
-    },
-    include: jobInclude,
-  })
-  res.json(updated)
+    const labourCharge = round2(body.data.labourCharge)
+    const updated = await prisma.serviceJob.update({
+      where: { id: existing.id },
+      data: {
+        type: ServiceType.SELF_LABOUR,
+        labourCharge,
+        customerCharge: labourCharge,
+        margin: labourCharge,
+        timeMinutes: body.data.timeMinutes,
+        status: 'READY',
+        readyAt: new Date(),
+      },
+      include: jobInclude,
+    })
+    res.json(updated)
+  } catch (e) {
+    send(res, e, 'Failed to save labour')
+  }
 })
 
-/** Send to subcontractor — amt given now */
+/** Send to subcontractor — amount given now */
 servicesRouter.post('/:id/subcontract', async (req, res) => {
   const body = z
     .object({
-      subcontractorName: z.string().min(1),
+      subcontractorName: z.string().trim().min(1, 'Enter subcontractor name'),
       amountGiven: z.number().nonnegative(),
     })
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
-  const existing = await prisma.serviceJob.findUnique({ where: { id: req.params.id } })
-  if (!existing) {
-    res.status(404).json({ error: 'Service job not found' })
-    return
-  }
-  if (!['BOOKED', 'RECEIVED', 'IN_PROGRESS'].includes(existing.status)) {
-    res.status(400).json({ error: 'Ticket is not open to send for subcontract' })
-    return
-  }
+  try {
+    const existing = await getJob(prisma, req.params.id)
+    if (!WORK_OPEN.includes(existing.status)) {
+      throw new Error('Ticket is not open to send for subcontract')
+    }
 
-  const amountGiven = round2(body.data.amountGiven)
-  const updated = await prisma.serviceJob.update({
-    where: { id: existing.id },
-    data: {
-      type: ServiceType.SUBCONTRACT,
-      subcontractorName: body.data.subcontractorName.trim(),
-      subcontractCost: amountGiven,
-      margin: round2(
-        Number(existing.customerCharge) -
-          Number(existing.spareCost) -
-          Number(existing.labourCharge) -
-          amountGiven,
-      ),
-      status: 'AT_SUBCONTRACT',
-    },
-    include: jobInclude,
-  })
-  res.json(updated)
+    const updated = await prisma.serviceJob.update({
+      where: { id: existing.id },
+      data: {
+        type: ServiceType.SUBCONTRACT,
+        subcontractorName: body.data.subcontractorName,
+        subcontractCost: round2(body.data.amountGiven),
+        status: 'AT_SUBCONTRACT',
+      },
+      include: jobInclude,
+    })
+    res.json(updated)
+  } catch (e) {
+    send(res, e, 'Failed to send to subcontractor')
+  }
 })
 
-/** Subcontract returned — final cost + charge customer → READY */
+/** Subcontract returned — final cost + our labour → READY */
 servicesRouter.post('/:id/subcontract-return', async (req, res) => {
   const body = z
     .object({
@@ -343,123 +384,193 @@ servicesRouter.post('/:id/subcontract-return', async (req, res) => {
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
-  const existing = await prisma.serviceJob.findUnique({ where: { id: req.params.id } })
-  if (!existing) {
-    res.status(404).json({ error: 'Service job not found' })
-    return
-  }
-  if (existing.status !== 'AT_SUBCONTRACT') {
-    res.status(400).json({ error: 'Ticket is not at subcontractor' })
-    return
-  }
+  try {
+    const existing = await getJob(prisma, req.params.id)
+    if (existing.status !== 'AT_SUBCONTRACT') throw new Error('Ticket is not at subcontractor')
 
-  const subcontractCost = round2(body.data.subcontractCost)
-  const labourCharge = round2(body.data.labourCharge)
-  // Total from customer = our labour + final sub cost
-  const customerCharge = round2(labourCharge + subcontractCost)
-  const margin = round2(customerCharge - Number(existing.spareCost) - labourCharge - subcontractCost)
+    const subcontractCost = round2(body.data.subcontractCost)
+    const labourCharge = round2(body.data.labourCharge)
+    const customerCharge = round2(labourCharge + subcontractCost)
+    if (customerCharge <= 0) throw new Error('Enter labour and/or subcontract amount')
 
-  const updated = await prisma.serviceJob.update({
-    where: { id: existing.id },
-    data: {
-      subcontractCost,
-      customerCharge,
-      labourCharge,
-      margin,
-      status: 'READY',
-    },
-    include: jobInclude,
-  })
-  res.json(updated)
+    const updated = await prisma.serviceJob.update({
+      where: { id: existing.id },
+      data: {
+        subcontractCost,
+        customerCharge,
+        labourCharge,
+        margin: labourCharge,
+        status: 'READY',
+        readyAt: new Date(),
+      },
+      include: jobInclude,
+    })
+    res.json(updated)
+  } catch (e) {
+    send(res, e, 'Failed to save subcontract return')
+  }
 })
 
-/** Delivery — collect balance, mark DELIVERED */
+/** Delivery — collect balance (or keep it on customer credit), refund extra advance, close */
 servicesRouter.post('/:id/deliver', async (req, res) => {
   const body = z
     .object({
       collectAmount: z.number().nonnegative().optional(),
-      paymentMode: z.string().optional(),
+      paymentMode: modeSchema,
     })
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
-  const existing = await loadJob(req.params.id)
-  if (!existing) {
-    res.status(404).json({ error: 'Service job not found' })
-    return
-  }
-  if (existing.status !== 'READY') {
-    res.status(400).json({ error: 'Only READY tickets can be delivered' })
-    return
-  }
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await getJob(tx, req.params.id)
+      if (existing.status !== 'READY') throw new Error('Only READY tickets can be delivered')
 
-  const charge = Number(existing.customerCharge)
-  const alreadyPaid = Number(existing.paidAmount)
-  const due = Math.max(round2(charge - alreadyPaid), 0)
-  const collect =
-    body.data.collectAmount !== undefined ? round2(body.data.collectAmount) : due
-  const paidAmount = round2(alreadyPaid + collect)
+      const charge = Number(existing.customerCharge)
+      const alreadyPaid = Number(existing.paidAmount)
+      const due = round2(Math.max(charge - alreadyPaid, 0))
+      const refund = round2(Math.max(alreadyPaid - charge, 0))
+      const collect = round2(Math.min(body.data.collectAmount ?? due, due))
+      rejectCreditMode(body.data.paymentMode, collect)
+      const stillDue = round2(due - collect)
 
-  const updated = await prisma.serviceJob.update({
-    where: { id: existing.id },
-    data: {
-      paidAmount,
-      status: 'DELIVERED',
-      deliveredAt: new Date(),
-    },
-    include: jobInclude,
-  })
-  res.json(updated)
+      if (stillDue > 0 && !existing.customerId) {
+        throw new Error('Collect the full balance — no customer on this ticket for credit')
+      }
+
+      await recordPayment(tx, existing.id, collect, body.data.paymentMode, 'Collected at delivery')
+      if (refund > 0) {
+        await recordPayment(tx, existing.id, -refund, body.data.paymentMode, 'Advance refunded')
+      }
+      if (stillDue > 0 && existing.customerId) {
+        await tx.customer.update({
+          where: { id: existing.customerId },
+          data: { creditBalance: { increment: stillDue } },
+        })
+      }
+
+      await tx.serviceJob.update({
+        where: { id: existing.id },
+        data: {
+          paidAmount: round2(alreadyPaid + collect - refund),
+          status: 'DELIVERED',
+          deliveredAt: new Date(),
+        },
+      })
+      return tx.serviceJob.findUnique({ where: { id: existing.id }, include: jobInclude })
+    })
+    res.json(result)
+  } catch (e) {
+    send(res, e, 'Delivery failed')
+  }
 })
 
-servicesRouter.patch('/:id', async (req, res) => {
+/** Collect a balance left on credit at delivery */
+servicesRouter.post('/:id/payments', async (req, res) => {
   const body = z
     .object({
-      status: z.string().optional(),
-      customerCharge: z.number().nonnegative().optional(),
-      labourCharge: z.number().nonnegative().optional(),
-      subcontractCost: z.number().nonnegative().optional(),
-      issue: z.string().optional(),
+      amount: z.number().positive('Enter an amount'),
+      mode: modeSchema,
+      note: z.string().optional(),
     })
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
-  const existing = await prisma.serviceJob.findUnique({ where: { id: req.params.id } })
-  if (!existing) {
-    res.status(404).json({ error: 'Service job not found' })
+  try {
+    rejectCreditMode(body.data.mode, body.data.amount)
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await getJob(tx, req.params.id)
+      if (existing.status !== 'DELIVERED') {
+        throw new Error('Balance is collected at delivery for open tickets')
+      }
+      const due = round2(Number(existing.customerCharge) - Number(existing.paidAmount))
+      if (due <= 0) throw new Error('Nothing pending on this ticket')
+      const amount = round2(Math.min(body.data.amount, due))
+
+      await recordPayment(tx, existing.id, amount, body.data.mode, body.data.note || 'Balance collected')
+      if (existing.customerId) {
+        await tx.customer.update({
+          where: { id: existing.customerId },
+          data: { creditBalance: { decrement: amount } },
+        })
+      }
+      await tx.serviceJob.update({
+        where: { id: existing.id },
+        data: { paidAmount: { increment: amount } },
+      })
+      return tx.serviceJob.findUnique({ where: { id: existing.id }, include: jobInclude })
+    })
+    res.json(result)
+  } catch (e) {
+    send(res, e, 'Payment failed')
+  }
+})
+
+/** Cancel — return any spares to stock and optionally refund the advance */
+servicesRouter.post('/:id/cancel', async (req, res) => {
+  const body = z
+    .object({
+      reason: z.string().trim().min(1, 'Enter a reason'),
+      refundAdvance: z.boolean().default(true),
+      paymentMode: modeSchema,
+    })
+    .safeParse(req.body)
+
+  if (!body.success) {
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
-  const labourCharge = body.data.labourCharge ?? Number(existing.labourCharge)
-  const subcontractCost = body.data.subcontractCost ?? Number(existing.subcontractCost)
-  const customerCharge = body.data.customerCharge ?? Number(existing.customerCharge)
-  const margin = round2(customerCharge - Number(existing.spareCost) - labourCharge - subcontractCost)
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await getJob(tx, req.params.id)
+      if (!CANCELLABLE.includes(existing.status)) throw new Error('This ticket is already closed')
 
-  const updated = await prisma.serviceJob.update({
-    where: { id: req.params.id },
-    data: {
-      status: body.data.status,
-      labourCharge,
-      subcontractCost,
-      customerCharge,
-      margin,
-      issue: body.data.issue,
-      deliveredAt:
-        body.data.status === 'DELIVERED' ? new Date() : undefined,
-    },
-    include: jobInclude,
-  })
-  res.json(updated)
+      const spares = await tx.serviceSpare.findMany({ where: { serviceJobId: existing.id } })
+      for (const s of spares) {
+        await tx.product.update({
+          where: { id: s.productId },
+          data: { stockQty: { increment: s.qty } },
+        })
+      }
+      await tx.serviceSpare.deleteMany({ where: { serviceJobId: existing.id } })
+
+      const paid = Number(existing.paidAmount)
+      const refundMode =
+        body.data.paymentMode === PaymentMode.CREDIT ? PaymentMode.CASH : body.data.paymentMode
+      if (body.data.refundAdvance && paid > 0) {
+        await recordPayment(tx, existing.id, -paid, refundMode, 'Advance refunded on cancel')
+      }
+      const kept = body.data.refundAdvance ? 0 : paid
+
+      await tx.serviceJob.update({
+        where: { id: existing.id },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt: new Date(),
+          cancelReason: body.data.reason,
+          spareCost: 0,
+          customerCharge: kept,
+          paidAmount: kept,
+          margin: round2(kept - Number(existing.subcontractCost)),
+        },
+      })
+      return tx.serviceJob.findUnique({ where: { id: existing.id }, include: jobInclude })
+    })
+    res.json(result)
+  } catch (e) {
+    send(res, e, 'Cancel failed')
+  }
 })

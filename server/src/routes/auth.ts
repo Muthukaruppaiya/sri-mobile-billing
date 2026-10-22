@@ -23,7 +23,7 @@ authRouter.post('/login', async (req, res) => {
   }
 
   const employee = await prisma.employee.findUnique({
-    where: { username: body.data.username },
+    where: { username: body.data.username.trim().toLowerCase() },
   })
 
   if (!employee || !employee.active) {
@@ -83,6 +83,7 @@ authRouter.post('/login', async (req, res) => {
     role: employee.role,
     name: employee.name,
   }
+  await prisma.employee.update({ where: { id: employee.id }, data: { lastLoginAt: new Date() } })
   const token = signToken(payload)
   res.json({ token, user: payload })
 })

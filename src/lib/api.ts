@@ -17,15 +17,39 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const token = getToken()
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
-  const res = await fetch(`/api${path}`, { ...options, headers })
+  let res: Response
+  try {
+    res = await fetch(`/api${path}`, { ...options, headers })
+  } catch {
+    throw new Error('Cannot reach the server. Check the connection and try again.')
+  }
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    const err = data.error
-    const message =
-      typeof err === 'string'
-        ? err
-        : data.message || (err ? JSON.stringify(err) : `Request failed (${res.status})`)
-    throw new Error(message)
+    if (res.status === 401 && token && path !== '/auth/login') {
+      setToken(null)
+      window.dispatchEvent(new Event('sri:logged-out'))
+    }
+    throw new Error(errorText(data, res.status))
   }
   return data as T
+}
+
+function errorText(data: { error?: unknown; message?: string }, status: number) {
+  const err = data.error
+  if (typeof err === 'string') return err
+  if (err && typeof err === 'object') {
+    const { formErrors, fieldErrors } = err as {
+      formErrors?: string[]
+      fieldErrors?: Record<string, string[] | undefined>
+    }
+    const first =
+      formErrors?.[0] ||
+      Object.entries(fieldErrors || {})
+        .map(([k, v]) => (v?.[0] ? `${k}: ${v[0]}` : ''))
+        .find(Boolean)
+    if (first) return first
+  }
+  if (data.message) return data.message
+  if (status >= 500) return 'Server error — please try again'
+  return `Request failed (${status})`
 }

@@ -16,6 +16,10 @@ export type AppSettings = {
   shopCity?: string | null
   shopGstin?: string | null
   invoicePrefix: string
+  invoiceSeq?: number
+  serviceSeq?: number
+  invoiceTerms?: string | null
+  serviceTerms?: string | null
   defaultTaxPercent: number
   geoLoginEnabled: boolean
   geoLatitude?: number | null

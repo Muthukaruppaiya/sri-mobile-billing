@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Navigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence } from 'framer-motion'
-import { RefreshCw, Landmark } from 'lucide-react'
+import { RefreshCw, Landmark, Printer } from 'lucide-react'
+import { openDoc } from '../lib/print'
 import { api } from '../lib/api'
 import type { PhoneUnit, Product, Sale } from '../lib/types'
 import { formatINR } from '../lib/types'
@@ -49,7 +50,7 @@ export function SalePage() {
   const kind: SaleKind = resolved || 'NEW_MOBILE'
   const qc = useQueryClient()
 
-  const [done, setDone] = useState<string | null>(null)
+  const [done, setDone] = useState<Sale | null>(null)
   const [error, setError] = useState('')
   const [customer, setCustomer] = useState<CustomerDraft>(emptyCustomerDraft)
   const [phoneUnitId, setPhoneUnitId] = useState('')
@@ -123,8 +124,9 @@ export function SalePage() {
   const gst = splitInclusive(lineTotal, taxPercent)
   const exchangeDownpay = useExchange ? Math.round(Math.max(Number(exchange.agreedValue) || 0, 0)) : 0
   const afterExchange = Math.max(lineTotal - exchangeDownpay, 0)
+  const onCredit = paymentMode === 'CREDIT'
   // Cash cannot exceed what remains after exchange downpay
-  const cashInHand = Math.min(Math.round(Math.max(Number(inHand) || 0, 0)), afterExchange)
+  const cashInHand = onCredit ? 0 : Math.min(Math.round(Math.max(Number(inHand) || 0, 0)), afterExchange)
   const remainingDue = Math.max(afterExchange - cashInHand, 0)
   // Finance log only: company remits this remaining amount to the shop
   const financedAmount = useFinance ? remainingDue : 0
@@ -180,7 +182,8 @@ export function SalePage() {
       })
     },
     onSuccess: (s) => {
-      setDone(`${kind === 'USED_PHONE' ? 'Used phone sale' : 'Sale'} saved · ${formatINR(s.grandTotal)} · ${s.paymentStatus}`)
+      setDone(s)
+      setPaymentMode('CASH')
       setCustomer(emptyCustomerDraft())
       setPhoneUnitId('')
       setUnitPrice(0)
@@ -271,6 +274,14 @@ export function SalePage() {
       setError('Complete exchange details')
       return
     }
+    if (useExchange && exchangeDownpay > lineTotal) {
+      setError('Exchange value is more than the phone price')
+      return
+    }
+    if (unitPrice <= 0) {
+      setError('Enter the sale price')
+      return
+    }
     if (useFinance && !financierName.trim()) {
       setError('Add financier in Finance popup')
       return
@@ -293,7 +304,22 @@ export function SalePage() {
         </div>
         <AnimatePresence>
           {done ? (
-            <SuccessBanner title="Sale created successfully" detail={done} onClose={() => setDone(null)} />
+            <SuccessBanner
+              title={`Invoice ${done.invoiceNo || ''} saved`}
+              detail={`${done.customer?.name || 'Customer'} · ${formatINR(done.grandTotal)} · ${
+                done.hasFinance ? 'Finance' : done.paymentStatus === 'PAID' ? 'Paid' : `${formatINR(done.creditAmount)} due`
+              }`}
+              onClose={() => setDone(null)}
+              actions={
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => openDoc('sale', done.id, { autoPrint: true })}
+                >
+                  <Printer size={14} /> Print invoice
+                </button>
+              }
+            />
           ) : null}
         </AnimatePresence>
         {error ? <p className="purchase-desk__error">{error}</p> : null}
@@ -324,7 +350,7 @@ export function SalePage() {
                 value={paymentMode}
                 placeholder="Type mode…"
                 options={[...PAYMENT_MODES]}
-                onChange={setPaymentMode}
+                onChange={(v) => setPaymentMode(v || 'CASH')}
               />
             </label>
             <label>
@@ -333,7 +359,8 @@ export function SalePage() {
                 type="number"
                 min={0}
                 max={afterExchange}
-                value={inHand || ''}
+                disabled={onCredit}
+                value={onCredit ? '' : inHand || ''}
                 onChange={(e) => setInHand(Math.min(Number(e.target.value) || 0, afterExchange))}
                 onFocus={() => {
                   if (!useFinance && !inHand) setInHand(afterExchange)

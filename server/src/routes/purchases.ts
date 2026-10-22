@@ -9,8 +9,11 @@ import {
   PurchaseType,
 } from '@prisma/client'
 import { prisma } from '../prisma.js'
+import { zodMessage } from '../lib/http.js'
 import { requireAuth } from '../middleware/auth.js'
 import { round2, splitInclusive } from '../lib/money.js'
+import { resolveCustomer } from '../lib/customers.js'
+import { intakePhoneUnit, uniqueSku } from '../lib/stock.js'
 
 export const purchasesRouter = Router()
 purchasesRouter.use(requireAuth)
@@ -124,42 +127,33 @@ purchasesRouter.get('/:id', async (req, res) => {
 purchasesRouter.post('/', async (req, res) => {
   const parsed = createSchema.safeParse(req.body)
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() })
+    res.status(400).json({ error: zodMessage(parsed.error) })
     return
   }
   const data = parsed.data
   const userId = req.user!.id
 
+  if (data.paymentMode === PaymentMode.CREDIT && data.paidAmount > 0) {
+    res.status(400).json({
+      error: 'Mode "Credit" means nothing is paid now — set paid amount to 0 or pick Cash / UPI',
+    })
+    return
+  }
+
+  const allImeis = data.items.flatMap((l) => (l.imeis || []).map((i) => i.trim()).filter(Boolean))
+  const dupInBill = allImeis.filter((imei, i) => allImeis.indexOf(imei) !== i)
+  if (dupInBill.length) {
+    res.status(400).json({ error: `IMEI entered twice on this bill: ${[...new Set(dupInBill)].join(', ')}` })
+    return
+  }
+
   try {
     const result = await prisma.$transaction(async (tx) => {
-      let customerId = data.customerId
       if (data.supplierId) {
         const supplier = await tx.supplier.findUnique({ where: { id: data.supplierId } })
         if (!supplier) throw new Error('Supplier not found')
       }
-      if (data.createCustomer) {
-        const phone = data.createCustomer.phone?.trim()
-        const existing = phone
-          ? await tx.customer.findFirst({
-              where: { active: true, OR: [{ phone }, { altPhone: phone }] },
-            })
-          : null
-        if (existing) {
-          customerId = existing.id
-        } else {
-          const created = await tx.customer.create({
-            data: {
-              name: data.createCustomer.name.trim(),
-              phone: phone || undefined,
-              notes: data.createCustomer.notes,
-            },
-          })
-          customerId = created.id
-        }
-      } else if (customerId) {
-        const customer = await tx.customer.findUnique({ where: { id: customerId } })
-        if (!customer) throw new Error('Customer not found')
-      }
+      const customerId = await resolveCustomer(tx, data)
 
       const normalizedItems: Array<{
         productId: string
@@ -183,7 +177,7 @@ purchasesRouter.post('/', async (req, res) => {
         if (line.createProduct) {
           const created = await tx.product.create({
             data: {
-              sku: line.createProduct.sku,
+              sku: await uniqueSku(tx, line.createProduct.sku),
               name: line.createProduct.name,
               brand: line.createProduct.brand,
               model: line.createProduct.model,
@@ -220,12 +214,15 @@ purchasesRouter.post('/', async (req, res) => {
           if (imeis.length !== line.qty) {
             throw new Error(`IMEI count (${imeis.length}) must match qty (${line.qty})`)
           }
-          const dup = await tx.phoneUnit.findMany({
-            where: { imei: { in: imeis } },
+          const inHand = await tx.phoneUnit.findMany({
+            where: {
+              imei: { in: imeis },
+              status: { in: [PhoneStatus.IN_STOCK, PhoneStatus.IN_SERVICE] },
+            },
             select: { imei: true },
           })
-          if (dup.length) {
-            throw new Error(`IMEI already exists: ${dup.map((d) => d.imei).join(', ')}`)
+          if (inHand.length) {
+            throw new Error(`IMEI already in stock: ${inHand.map((d) => d.imei).join(', ')}`)
           }
         }
 
@@ -298,17 +295,14 @@ purchasesRouter.post('/', async (req, res) => {
 
         if (isPhone) {
           for (const imei of line.imeis) {
-            const unit = await tx.phoneUnit.create({
-              data: {
-                imei,
-                productId: line.productId,
-                status: PhoneStatus.IN_STOCK,
-                cost: line.unitCost,
-                suggestedSellPrice: line.suggestedSellPrice ?? null,
-                purchaseItemId: item.id,
-                color: line.color,
-                conditionNote: line.conditionNote,
-              },
+            const unit = await intakePhoneUnit(tx, {
+              imei,
+              productId: line.productId,
+              cost: line.unitCost,
+              suggestedSellPrice: line.suggestedSellPrice ?? null,
+              purchaseItemId: item.id,
+              color: line.color,
+              conditionNote: line.conditionNote,
             })
             await tx.phoneEvent.create({
               data: {
@@ -353,7 +347,7 @@ purchasesRouter.post('/', async (req, res) => {
         if (customerId) {
           await tx.customer.update({
             where: { id: customerId },
-            data: { creditBalance: { increment: creditAmount } },
+            data: { payableBalance: { increment: creditAmount } },
           })
         }
       }
@@ -381,7 +375,7 @@ purchasesRouter.post('/:id/payments', async (req, res) => {
     .safeParse(req.body)
 
   if (!body.success) {
-    res.status(400).json({ error: body.error.flatten() })
+    res.status(400).json({ error: zodMessage(body.error) })
     return
   }
 
@@ -416,7 +410,7 @@ purchasesRouter.post('/:id/payments', async (req, res) => {
       if (purchase.customerId) {
         await tx.customer.update({
           where: { id: purchase.customerId },
-          data: { creditBalance: { decrement: amount } },
+          data: { payableBalance: { decrement: amount } },
         })
       }
 

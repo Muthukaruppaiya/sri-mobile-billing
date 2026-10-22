@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { api, getToken, setToken } from './api'
 
 export type AuthUser = {
@@ -23,6 +24,7 @@ type AuthCtx = {
 const Ctx = createContext<AuthCtx | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const qc = useQueryClient()
   const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -41,6 +43,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false))
   }, [])
 
+  // A 401 anywhere (disabled account, expired token) sends the user back to login.
+  useEffect(() => {
+    const onLoggedOut = () => {
+      setUser(null)
+      qc.clear()
+    }
+    window.addEventListener('sri:logged-out', onLoggedOut)
+    return () => window.removeEventListener('sri:logged-out', onLoggedOut)
+  }, [qc])
+
   const value = useMemo<AuthCtx>(
     () => ({
       user,
@@ -57,15 +69,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               : {}),
           }),
         })
+        qc.clear()
         setToken(res.token)
         setUser(res.user)
       },
       logout() {
         setToken(null)
         setUser(null)
+        qc.clear()
       },
     }),
-    [user, loading],
+    [user, loading, qc],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

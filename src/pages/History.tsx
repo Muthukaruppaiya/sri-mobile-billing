@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { PackagePlus } from 'lucide-react'
+import { PackagePlus, Printer } from 'lucide-react'
+import { openDoc } from '../lib/print'
 import { api } from '../lib/api'
 import type { Purchase, PurchaseType } from '../lib/types'
 import { formatINR, partyName } from '../lib/types'
@@ -61,6 +62,7 @@ export function HistoryPage() {
       qc.invalidateQueries({ queryKey: ['purchases'] })
       qc.invalidateQueries({ queryKey: ['reports'] })
       qc.invalidateQueries({ queryKey: ['suppliers'] })
+      qc.invalidateQueries({ queryKey: ['customers'] })
       setSelectedId(p.id)
       setSettleAmt(Number(p.creditAmount) > 0 ? String(Number(p.creditAmount)) : '')
       setSettleError('')
@@ -159,7 +161,7 @@ export function HistoryPage() {
         />
       </div>
 
-      <Panel style={{ padding: 16 }} delay={0.05}>
+      <Panel style={{ padding: 16 }}>
         <div className="search-toolbar">
           <SearchField
             value={q}
@@ -245,13 +247,18 @@ export function HistoryPage() {
                         </span>
                       </td>
                       <td className="table-action">
-                        <button
-                          type="button"
-                          className={`btn btn--sm ${due > 0 ? 'btn--primary' : 'btn--ghost'}`}
-                          onClick={() => openPurchase(p)}
-                        >
-                          {due > 0 ? 'Pay' : 'Details'}
-                        </button>
+                        <div className="table-actions">
+                          <button type="button" className="btn btn--sm btn--ghost" onClick={() => openDoc('purchase', p.id)}>
+                            <Printer size={12} /> {p.customer ? 'Voucher' : 'GRN'}
+                          </button>
+                          <button
+                            type="button"
+                            className={`btn btn--sm ${due > 0 ? 'btn--primary' : 'btn--ghost'}`}
+                            onClick={() => openPurchase(p)}
+                          >
+                            {due > 0 ? 'Pay' : 'Details'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )
@@ -289,11 +296,16 @@ export function HistoryPage() {
                 {settle.isPending ? 'Settling…' : `Pay ${formatINR(Number(settleAmt) || 0)}`}
               </button>
             </>
-          ) : (
-            <button type="button" className="btn btn--ghost" onClick={closePurchase}>
-              Close
-            </button>
-          )
+          ) : selected ? (
+            <>
+              <button type="button" className="btn btn--ghost" onClick={() => openDoc('purchase', selected.id)}>
+                <Printer size={14} /> {selected.customer ? 'Voucher' : 'GRN'}
+              </button>
+              <button type="button" className="btn btn--ghost" onClick={closePurchase}>
+                Close
+              </button>
+            </>
+          ) : null
         }
       >
         {selected ? (

@@ -41,6 +41,7 @@ enum PaymentStatus {
 enum PaymentRefType {
   PURCHASE
   SALE
+  SERVICE
 }
 
 enum PaymentMode {
@@ -80,6 +81,7 @@ model Employee {
   passwordHash String
   role         Role       @default(EMPLOYEE)
   active       Boolean    @default(true)
+  lastLoginAt  DateTime?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
   purchases    Purchase[]
@@ -109,7 +111,10 @@ model Customer {
   address       String?
   city          String?
   gstin         String?
+  /// Customer owes the shop (sale / service credit)
   creditBalance Decimal      @default(0) @db.Decimal(12, 2)
+  /// Shop owes the customer (used phone buy-in not fully paid)
+  payableBalance Decimal     @default(0) @db.Decimal(12, 2)
   notes         String?
   active        Boolean      @default(true)
   createdAt     DateTime     @default(now())
@@ -237,6 +242,8 @@ model Payment {
   purchase    Purchase?      @relation(fields: [purchaseId], references: [id])
   saleId      String?
   sale        Sale?          @relation(fields: [saleId], references: [id])
+  serviceJobId String?
+  serviceJob  ServiceJob?    @relation(fields: [serviceJobId], references: [id], onDelete: Cascade)
   amount      Decimal        @db.Decimal(12, 2)
   mode        PaymentMode    @default(CASH)
   paidAt      DateTime       @default(now())
@@ -249,7 +256,7 @@ model Sale {
   type          SaleType
   customerId    String?
   customer      Customer?     @relation(fields: [customerId], references: [id])
-  invoiceNo     String?
+  invoiceNo     String?       @unique
   saleDate      DateTime      @default(now())
   subtotal      Decimal       @default(0) @db.Decimal(12, 2)
   discount      Decimal       @default(0) @db.Decimal(12, 2)
@@ -326,6 +333,11 @@ model ServiceJob {
   deviceModel       String?
   imei              String?
   issue             String?
+  /// Items received with the device (SIM tray, cover, charger…)
+  accessories       String?
+  /// Physical condition at intake (scratches, cracked back…)
+  conditionNote     String?
+  notes             String?
   labourCharge      Decimal      @default(0) @db.Decimal(12, 2)
   spareCost         Decimal      @default(0) @db.Decimal(12, 2)
   subcontractCost   Decimal      @default(0) @db.Decimal(12, 2)
@@ -336,15 +348,19 @@ model ServiceJob {
   margin            Decimal      @default(0) @db.Decimal(12, 2)
   timeMinutes       Int?
   status            String       @default("BOOKED")
-  /// BOOKED → AT_SUBCONTRACT → READY → DELIVERED
+  /// BOOKED → AT_SUBCONTRACT → READY → DELIVERED (or CANCELLED)
   subcontractorName String?
   promisedDate      DateTime?
+  readyAt           DateTime?
   deliveredAt       DateTime?
+  cancelledAt       DateTime?
+  cancelReason      String?
   createdById       String
   createdBy         Employee     @relation(fields: [createdById], references: [id])
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
   spares            ServiceSpare[]
+  payments          Payment[]
 }
 
 model ServiceSpare {
@@ -415,6 +431,12 @@ model AppSettings {
   shopCity           String?
   shopGstin          String?
   invoicePrefix      String   @default("INV")
+  /// Last issued sale invoice / service ticket number
+  invoiceSeq         Int      @default(0)
+  serviceSeq         Int      @default(0)
+  /// Printed at the bottom of sale invoices / service job cards
+  invoiceTerms       String?
+  serviceTerms       String?
   defaultTaxPercent  Float    @default(18)
   /// Restrict employee login to shop geo-fence (admin always allowed)
   geoLoginEnabled    Boolean  @default(false)

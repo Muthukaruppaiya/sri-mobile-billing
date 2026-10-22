@@ -1,4 +1,6 @@
 import 'dotenv/config'
+import fs from 'node:fs'
+import path from 'node:path'
 import cors from 'cors'
 import express from 'express'
 import { authRouter } from './routes/auth.js'
@@ -18,11 +20,18 @@ import { syncPhoneCatalog } from './lib/syncCatalog.js'
 
 const app = express()
 const port = Number(process.env.PORT || 4000)
+const isProd = process.env.NODE_ENV === 'production'
+
+const jwtSecret = process.env.JWT_SECRET || ''
+if (isProd && (jwtSecret.length < 16 || jwtSecret.includes('change-me'))) {
+  console.error('JWT_SECRET in server/.env must be a long random value in production. Refusing to start.')
+  process.exit(1)
+}
 
 app.use(
   cors({
     origin: [
-      process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+      ...(process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map((s) => s.trim()),
       'http://127.0.0.1:5173',
     ],
     credentials: true,
@@ -55,12 +64,28 @@ app.use('/api/reports', reportsRouter)
 app.use('/api/settings', settingsRouter)
 app.use('/api/catalog', catalogRouter)
 
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'Not found' })
+})
+
+// Production: the built React app (../dist) is served from this same port.
+const clientDist = path.resolve(process.env.CLIENT_DIST || path.join(process.cwd(), '..', 'dist'))
+if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+  app.use(express.static(clientDist, { index: false, maxAge: '7d' }))
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next()
+    res.setHeader('Cache-Control', 'no-cache')
+    res.sendFile(path.join(clientDist, 'index.html'))
+  })
+  console.log(`Serving web app from ${clientDist}`)
+}
+
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err)
   res.status(500).json({ error: 'Internal server error' })
 })
 
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`SRI MOBILES API on http://localhost:${port}`)
   void prisma.catalogBrand.count().then((n) => {
     if (n > 0) return
